@@ -80,8 +80,8 @@ class SqliteUsedTokenStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._local = threading.local()
-        with self._connect() as conn:
+        conn = self._connect()
+        try:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS used_tokens ("
                 " use_key TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)"
@@ -90,7 +90,10 @@ class SqliteUsedTokenStore:
                 "CREATE TABLE IF NOT EXISTS revoked_capabilities ("
                 " capability_id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)"
             )
-            conn.commit()
+        finally:
+            # Always close: a leaked handle keeps the file locked on Windows,
+            # which breaks temp-directory cleanup and copy-based deployments.
+            conn.close()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=10.0, isolation_level=None)

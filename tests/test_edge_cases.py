@@ -644,6 +644,24 @@ class BoundaryHardeningTests(unittest.TestCase):
         self.assertEqual(policy.profile, "dev")
 
 
+class StoreLifetimeTests(unittest.TestCase):
+    def test_sqlite_store_releases_its_handle(self) -> None:
+        """A leaked SQLite handle locks the file on Windows and blocks cleanup."""
+        from whyward.capability import SqliteUsedTokenStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "used.sqlite3"
+            store = SqliteUsedTokenStore(path)
+            self.assertTrue(store.claim("use-1", 4_000_000_000))
+            self.assertFalse(store.claim("use-1", 4_000_000_000))
+            store.revoke("cap-1", 4_000_000_000)
+            self.assertTrue(store.is_revoked("cap-1"))
+            self.assertEqual(store.purge(0), 0)
+            # Renaming/removing the file must work: no connection may still be open.
+            path.unlink()
+            self.assertFalse(path.exists())
+
+
 class IsolationEdgeTests(unittest.TestCase):
     def test_isolation_report_shape(self) -> None:
         report = isolation_report()
