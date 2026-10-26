@@ -1,0 +1,39 @@
+name: acceptance
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-room:
+    name: acceptance harness (clean checkout, py3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run the clean-room acceptance harness
+        run: |
+          python3 docs/acceptance/acceptance_runner.py \
+            --report acceptance-report.md \
+            --json acceptance-report.json
+      - name: Run the mutation check (evidence has teeth)
+        run: python3 docs/acceptance/falsification_check.py --json mutation-results.json
+      - name: Upload artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-report
+          path: |
+            acceptance-report.md
+            acceptance-report.json
+            mutation-results.json
+          retention-days: 30
