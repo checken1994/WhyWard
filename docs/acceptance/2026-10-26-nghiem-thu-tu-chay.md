@@ -25,7 +25,7 @@
 |---|---|---|---|
 | A-01 | Xuất xứ repo rõ ràng, cây làm việc sạch | PASS | `commit=f17129c…` `dirty=False` |
 | A-02 | Chỉ dùng thư viện chuẩn | PASS | 0 import ngoài stdlib |
-| A-03 | Bộ test của repo | PASS | 243 test, `OK`, 17.9 s |
+| A-03 | Bộ test của repo | PASS | 245 test, `OK`, 17.9 s |
 | A-04 | 15 probe tấn công | PASS | `15 probes: 15 OK, 0 VULNERABLE` |
 | A-05 | Hành trình vận hành | PASS | demo 0 · verify 0 · anchor 0 · ask trả lời 0 · ask bị giữ lại **3** · report 0 · doctor 0 |
 | A-06 | Phát hiện sửa đổi | PASS | sửa ledger = True · cắt ledger so với anchor = True · sửa catalog = True |
@@ -38,7 +38,7 @@ Chi tiết thô (nguyên văn từ harness):
 ```text
 [PASS] A-01 ... commit=f17129cefbb0 branch=arena/6afa33c6-whyward dirty=False
 [PASS] A-02 ... 0 non-stdlib imports
-[PASS] A-03 ... Ran 243 tests in 17.928s | OK
+[PASS] A-03 ... Ran 245 tests in 17.928s | OK
 [PASS] A-04 ... 15 probes: 15 OK, 0 VULNERABLE
 [PASS] A-05 ... demo rc=0 verify rc=0 (valid: true, events: 6) checkpoint rc=0
                 anchored verify rc=0 ask(answered) rc=0 ask(withheld) rc=3

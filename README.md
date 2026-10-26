@@ -112,7 +112,7 @@ from "it broke".
 ## Tests and quality gates
 
 ```bash
-PYTHONPATH=src:tests python -m unittest discover -s tests -t tests   # 232 tests, stdlib only
+PYTHONPATH=src python -m unittest discover -s tests -t tests          # 245 tests, stdlib only
 ruff check src tests                                                 # lint
 mypy                                                                 # strict, 20 modules
 bandit -q -r src -ll                                                 # security scan, medium+
@@ -120,7 +120,7 @@ coverage run --source=src/whyward -m pytest -q && coverage report    # gate: 85%
 PYTHONPATH=src python docs/audit/reproduce_findings.py               # 15 adversarial probes
 ```
 
-Current results (243 tests, 88% branch coverage, 15/15 probes, 9/9 acceptance
+Current results (245 tests, 88% branch coverage, 15/15 probes, 9/9 acceptance
 checks and 10/10 detected mutations on a clean clone) are recorded in
 [`docs/audit/2026-10-26-bao-cao-trien-khai.md`](docs/audit/2026-10-26-bao-cao-trien-khai.md)
 and [`docs/acceptance/2026-10-26-nghiem-thu-tu-chay.md`](docs/acceptance/2026-10-26-nghiem-thu-tu-chay.md).

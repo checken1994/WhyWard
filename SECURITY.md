@@ -92,6 +92,6 @@ honest, adversarial part of this repository.
 
 ```bash
 PYTHONPATH=src python docs/audit/reproduce_findings.py     # 15 adversarial probes
-PYTHONPATH=src:tests python -m unittest discover -s tests -t tests
+PYTHONPATH=src python -m unittest discover -s tests -t tests
 bandit -q -r src -ll
 ```

@@ -38,7 +38,7 @@ python3 docs/acceptance/acceptance_runner.py \
 # 4. Independently re-derive the decision (do not trust the harness blindly)
 cat acceptance-report.md
 PYTHONPATH=src python3 docs/audit/reproduce_findings.py
-PYTHONPATH=src:tests python3 -m unittest discover -s tests -t tests
+PYTHONPATH=src python3 -m unittest discover -s tests -t tests
 ```
 
 Requirements: Python ≥ 3.11, no network, no third-party packages. Total runtime

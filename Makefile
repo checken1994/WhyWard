@@ -9,7 +9,7 @@ help:
 	@grep -E '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | sed 's/:.*##/ — /'
 
 test: ## run the stdlib test suite
-	PYTHONPATH=src:tests $(PYTHON) -m unittest discover -s tests -t tests
+	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests -t tests
 
 lint: ## ruff
 	ruff check src tests

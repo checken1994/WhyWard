@@ -122,13 +122,10 @@ class Harness:
         env_extra: dict[str, str] | None = None,
         timeout: int = 300,
     ) -> subprocess.CompletedProcess[str]:
-        env = {
-            "PYTHONPATH": str(SRC),
-            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-            "HOME": os.environ.get("HOME", str(Path.home())),
-            "PYTHONUNBUFFERED": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-        }
+        env = dict(os.environ)
+        env["PYTHONPATH"] = f"{SRC}{os.pathsep}{ROOT / 'tests'}"
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         if env_extra:
             env.update(env_extra)
         return subprocess.run(
@@ -199,7 +196,7 @@ def check_unit_tests(h: Harness) -> None:
     started = time.time()
     result = h.run(
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "tests"],
-        env_extra={"PYTHONPATH": f"{SRC}:{ROOT / 'tests'}"},
+        env_extra={"PYTHONPATH": f"{SRC}{os.pathsep}{ROOT / 'tests'}"},
         timeout=600,
     )
     tail = (result.stderr or result.stdout).strip().splitlines()
@@ -209,7 +206,7 @@ def check_unit_tests(h: Harness) -> None:
         "Repository test suite passes",
         result.returncode == 0 and "OK" in (result.stderr or ""),
         summary,
-        command="PYTHONPATH=src:tests python -m unittest discover -s tests -t tests",
+        command="PYTHONPATH=src python -m unittest discover -s tests -t tests",
         output=result.stderr or result.stdout,
         duration=time.time() - started,
     )

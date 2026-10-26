@@ -23,11 +23,10 @@ PRODUCTION_POLICY = ROOT / "examples" / "policy.production.json"
 
 
 def run_cli(*argv: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    base = {
-        "PYTHONPATH": str(ROOT / "src"),
-        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-        "HOME": os.environ.get("HOME", "/tmp"),
-    }
+    # Inherit the real environment (Windows needs SYSTEMROOT & friends) and only
+    # override what the test needs to control.
+    base = dict(os.environ)
+    base["PYTHONPATH"] = str(ROOT / "src")
     if env:
         base.update(env)
     return subprocess.run(

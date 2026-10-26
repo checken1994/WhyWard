@@ -126,12 +126,9 @@ MUTATIONS: tuple[Mutation, ...] = (
 
 
 def run_probe(scratch: Path, probe_id: str) -> tuple[bool, str]:
-    env = {
-        "PYTHONPATH": str(scratch / "src"),
-        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-        "HOME": os.environ.get("HOME", str(Path.home())),
-        "PYTHONDONTWRITEBYTECODE": "1",
-    }
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(scratch / "src")
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(
         [sys.executable, str(scratch / "docs" / "audit" / "reproduce_findings.py"), "--only", probe_id],
         capture_output=True,
