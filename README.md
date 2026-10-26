@@ -102,6 +102,20 @@ API mẫu chỉ nên chạy local; chưa có authentication/TLS production.
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
+## Đánh giá độc lập và probe tấn công
+
+Bản đánh giá 2026-10-26 (điểm, phát hiện, ánh xạ chuẩn quốc tế, lộ trình) nằm ở
+[`docs/audit/2026-10-26-danh-gia-he-thong.md`](docs/audit/2026-10-26-danh-gia-he-thong.md).
+Đi kèm là bộ probe tấn công tái lập được, mỗi probe ứng với một bài test âm tính
+cần chuyển từ đỏ sang xanh trước khi dùng thật:
+
+```bash
+PYTHONPATH=src python docs/audit/reproduce_findings.py
+```
+
+Tại commit hiện tại, bộ probe báo 15/15 hành vi cần bị chặn. Đây là *bản đồ
+việc cần làm*, không phải danh sách tính năng đã có.
+
 ## Kiến trúc ngắn
 
 ```text

@@ -12,6 +12,19 @@ Nguyên tắc roadmap: không tăng capability chỉ vì lập luận nghe thuy�
 - [x] Regression F1 cho Valdivia/Sumatra.
 - [x] CLI và local API tối thiểu.
 
+Đánh giá 2026-10-26 (`docs/audit/2026-10-26-danh-gia-he-thong.md`) cho thấy các
+bảo đảm trên **chưa được thực thi đầy đủ bằng cơ chế**: approval không gắn với
+proposal, bằng chứng tự khai vẫn được tin, capability sống qua restart, ledger
+hỏng khi nhiều writer, freshness không được kiểm. Các mục dưới đây là điều kiện
+vào của 0.2:
+
+- [ ] 15/15 probe trong `docs/audit/reproduce_findings.py` chuyển sang `OK` và
+      được đưa vào CI như test âm tính.
+- [ ] `run_python` tắt trong profile mặc định; mọi action cần người duyệt.
+- [ ] Ledger có khóa liên process + fsync + fail-fast khi bất biến.
+- [ ] Kill switch thu hồi được capability đã phát.
+
+
 ## 0.2 — Real source ingestion
 
 - [ ] Source registry theo domain.
