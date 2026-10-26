@@ -31,9 +31,8 @@ jobs:
             # One compact annotation: failing test names plus the tail, which
             # contains the traceback (GitHub caps a step at 10 annotations).
             names=$(grep -cE "^(FAIL|ERROR): " test-output.txt)
-            summary=$(grep -E "^(FAIL|ERROR): " test-output.txt | head -12 | tr '\n' '|')
-            tail_text=$(tail -c 4500 test-output.txt | tr '\n' '|')
-            echo "::error title=unit failures (${names})::${summary} || TAIL: ${tail_text}"
+            head_text=$(tr -d '\r' < test-output.txt | head -c 5500 | tr '\n' '|')
+            echo "::error title=unit failures (${names})::${head_text}"
           fi
           exit $code
 
