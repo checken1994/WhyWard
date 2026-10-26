@@ -15,6 +15,7 @@ detection" gap):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -86,39 +87,57 @@ def _hash_core(core: Mapping[str, Any]) -> str:
 
 
 class _FileLock:
-    """Advisory cross-process lock. No-op on platforms without either API."""
+    """Portable cross-process lock built on atomic exclusive file creation.
 
-    def __init__(self, handle: Any) -> None:
-        self._handle = handle
+    ``fcntl``/``msvcrt`` behave differently across platforms (and quietly fail on
+    some filesystems), which is exactly the failure mode an audit trail cannot
+    afford. ``O_CREAT | O_EXCL`` is atomic on every supported platform, so the
+    lock is a file that either exists or does not.
+
+    A crashed writer can leave the lock behind; locks older than
+    ``stale_after`` seconds are broken, and the wait is bounded by ``timeout``
+    so a stuck lock degrades into a loud error instead of a silent hang.
+    """
+
+    def __init__(self, path: Path, *, timeout: float = 15.0, stale_after: float = 60.0) -> None:
+        self.path = Path(f"{path}.lock")
+        self.timeout = timeout
+        self.stale_after = stale_after
+        self._fd: int | None = None
 
     def __enter__(self) -> _FileLock:
-        try:
-            import fcntl
-
-            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX)
-        except ImportError:  # pragma: no cover - Windows
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + self.timeout
+        while True:
             try:
-                import msvcrt
-
-                self._handle.seek(0)
-                msvcrt.locking(self._handle.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
-            except Exception:  # noqa: S110 - best-effort lock on unsupported platforms
-                pass
-        return self
+                self._fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                os.write(self._fd, f"{os.getpid()}\n".encode("ascii"))
+                return self
+            except FileExistsError:
+                try:
+                    age = time.time() - self.path.stat().st_mtime
+                except OSError:  # released between the two calls
+                    continue
+                if age > self.stale_after:
+                    with contextlib.suppress(OSError):
+                        self.path.unlink()
+                    continue
+                if time.monotonic() > deadline:
+                    raise IntegrityError(
+                        f"Ledger lock is held by another writer: {self.path}",
+                        code="LEDGER_LOCKED",
+                        details={"path": str(self.path), "timeout_seconds": self.timeout},
+                    ) from None
+                time.sleep(0.002)
 
     def __exit__(self, *exc: object) -> None:
-        try:
-            import fcntl
-
-            fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
-        except ImportError:  # pragma: no cover - Windows
+        if self._fd is not None:
             try:
-                import msvcrt
-
-                self._handle.seek(0)
-                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
-            except Exception:  # noqa: S110 - best-effort unlock
-                pass
+                os.close(self._fd)
+            finally:
+                self._fd = None
+        with contextlib.suppress(FileNotFoundError):
+            self.path.unlink()
 
 
 class Ledger:
@@ -211,7 +230,7 @@ class Ledger:
         trace_id: str = "",
     ) -> dict[str, Any]:
         actor_block = dict(actor) if isinstance(actor, Mapping) else {"kind": "name", "name": str(actor)}
-        with self._lock, self.path.open("a+", encoding="utf-8") as handle, _FileLock(handle):
+        with self._lock, _FileLock(self.path), self.path.open("a+", encoding="utf-8") as handle:
             self._reload_tail()
             core = {
                 "schema_version": LEDGER_EVENT_SCHEMA_VERSION,

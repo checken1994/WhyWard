@@ -767,6 +767,7 @@ class W13ResourceLimitTests(unittest.TestCase):
             self.assertEqual(result["bytes_read"], 1024)
             self.assertTrue(result["truncated"])
 
+    @unittest.skipIf(os.name == "nt", "symlink creation needs elevated rights on Windows")
     def test_symlink_write_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             keys = keyring()
@@ -783,6 +784,7 @@ class W13ResourceLimitTests(unittest.TestCase):
                 executor.execute(action, token)
             self.assertFalse((outside / "escaped.txt").exists())
 
+    @unittest.skipIf(os.name == "nt", "symlink creation needs elevated rights on Windows")
     def test_symlink_file_write_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             keys = keyring()

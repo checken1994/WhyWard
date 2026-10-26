@@ -677,6 +677,29 @@ class LedgerEdgeTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "LEDGER_INVALID")
             self.assertIn("Unsigned", str(ctx.exception))
 
+    def test_lock_timeout_is_a_typed_error(self) -> None:
+        from whyward.ledger import _FileLock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "l.jsonl"
+            held = _FileLock(path, timeout=1.0, stale_after=600.0)
+            with held, self.assertRaises(IntegrityError) as ctx:
+                with _FileLock(path, timeout=0.2, stale_after=600.0):
+                    pass
+            self.assertEqual(ctx.exception.code, "LEDGER_LOCKED")
+
+    def test_stale_lock_is_broken(self) -> None:
+        from whyward.ledger import _FileLock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "l.jsonl"
+            stale = Path(f"{path}.lock")
+            stale.write_text("999999\n", encoding="utf-8")
+            os.utime(stale, (0, 0))
+            with _FileLock(path, timeout=2.0, stale_after=1.0):
+                pass
+            self.assertFalse(stale.exists())
+
     def test_missing_anchor_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Ledger(Path(tmp) / "l.jsonl")
