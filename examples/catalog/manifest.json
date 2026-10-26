@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "dataset_version": "demo-0.1.0",
+  "created_at": "2026-10-26T00:00:00Z",
+  "shards": [
+    {
+      "path": "facts/geology.earthquakes.jsonl",
+      "sha256": "5eb79a70feb2c856302f4a741a93c39f7861cb016be275c380b54a7596aa7939",
+      "domain": "geology.earthquake",
+      "record_count": 2
+    }
+  ],
+  "completeness": {
+    "geology.earthquake": "not_complete"
+  },
+  "notes": "Bundled demo catalog. Records are marked demo_verified so the F1 matching behavior can be tested without claiming a fresh production source fetch."
+}

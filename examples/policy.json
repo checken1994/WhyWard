@@ -1,0 +1,16 @@
+{
+  "allowed_tools": ["write_text", "read_text", "run_python"],
+  "protected_path_prefixes": [".whyward", "control", "keys", "policy", "policies"],
+  "allowed_source_ids": ["usgs", "internal-test", "demo-source"],
+  "accepted_review_statuses": ["verified", "demo_verified"],
+  "human_required_risk_tiers": ["high", "critical"],
+  "max_autonomy_without_human": 2,
+  "min_independent_lineages": {
+    "low": 1,
+    "medium": 1,
+    "high": 2,
+    "critical": 2
+  },
+  "require_alternatives_from": "medium",
+  "require_consequences_from": "medium"
+}
