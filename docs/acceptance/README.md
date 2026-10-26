@@ -7,6 +7,7 @@ build it.
 | --- | --- |
 | `acceptance_runner.py` | One command that decides whether the checkout behaves as documented. Black-box first: subprocesses, exit codes, files, HTTP. |
 | `falsification_check.py` | Mutation check: disables one control at a time in a throwaway copy and requires the probes to notice. |
+| `REVIEW_BRIEF.md` | Self-contained brief to hand to an outside reviewer. Nothing else needs to be sent. |
 | `INDEPENDENCE.md` | Who counts as independent, what to run, what to publish, when to reject. |
 | `2026-10-26-nghiem-thu-tu-chay.md` | A self-run of the harness by the implementing agent — explicitly labelled **provisional**, not acceptance. |
 

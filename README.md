@@ -154,6 +154,10 @@ worktree is dirty, the commit is not recorded, or any probe/test fails.
 python3 docs/acceptance/acceptance_runner.py --report /tmp/acceptance-report.md
 ```
 
+If you are the reviewer: [`docs/acceptance/REVIEW_BRIEF.md`](docs/acceptance/REVIEW_BRIEF.md)
+is the whole instruction set. Everything else in this repository is the thing you
+are there to check, not to believe.
+
 ## Architecture in one screen
 
 ```text
