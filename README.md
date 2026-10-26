@@ -120,9 +120,12 @@ coverage run --source=src/whyward -m pytest -q && coverage report    # gate: 85%
 PYTHONPATH=src python docs/audit/reproduce_findings.py               # 15 adversarial probes
 ```
 
-Current results are recorded in
-[`docs/audit/2026-10-26-danh-gia-he-thong.md`](docs/audit/2026-10-26-danh-gia-he-thong.md)
-and [`docs/acceptance/`](docs/acceptance/).
+Current results (243 tests, 88% branch coverage, 15/15 probes, 8/8 acceptance
+checks on a clean clone) are recorded in
+[`docs/audit/2026-10-26-bao-cao-trien-khai.md`](docs/audit/2026-10-26-bao-cao-trien-khai.md)
+and [`docs/acceptance/2026-10-26-nghiem-thu-tu-chay.md`](docs/acceptance/2026-10-26-nghiem-thu-tu-chay.md).
+The self-run report is explicitly **not** an acceptance verdict — see
+[`docs/acceptance/INDEPENDENCE.md`](docs/acceptance/INDEPENDENCE.md).
 
 ## Independent acceptance
 
@@ -134,7 +137,7 @@ with raw command output attached. The harness refuses to accept a run where the
 worktree is dirty, the commit is not recorded, or any probe/test fails.
 
 ```bash
-python docs/acceptance/acceptance_runner.py --report /tmp/acceptance-report.md
+python3 docs/acceptance/acceptance_runner.py --report /tmp/acceptance-report.md
 ```
 
 ## Architecture in one screen
