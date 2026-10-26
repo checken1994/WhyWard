@@ -23,6 +23,7 @@ is not verified and should be treated as a design intention.
 | No third-party runtime dependency | README install | acceptance A-02 | `python docs/acceptance/acceptance_runner.py` |
 | Tampering is detectable | SECURITY limits | acceptance A-06 | same |
 | Documentation does not overclaim | INDEPENDENCE rule 5 | acceptance A-08 + reviewer spot checks | same |
+| The evidence has teeth | — | acceptance A-09 (10 mutations, all detected) | `python3 docs/acceptance/falsification_check.py` |
 
 ## Claims intentionally *not* made
 

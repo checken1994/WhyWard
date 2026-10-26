@@ -7,7 +7,7 @@
 | **Hình thức** | clone sạch từ `https://github.com/checken1994/WhyWard` vào thư mục tạm, không dùng bất kỳ artefact nào của máy phát triển |
 | **Môi trường** | Linux 6.1.158, Python 3.11.2, không cài thêm package nào |
 | **Lệnh** | `python3 docs/acceptance/acceptance_runner.py --report … --json …` |
-| **Kết quả** | **ACCEPTED — 8/8 check PASS**, `dirty=False`, exit 0, 20.9 s |
+| **Kết quả** | **ACCEPTED — 9/9 check PASS**, `dirty=False`, exit 0, 20.9 s |
 | **Ai chạy** | **Chính agent đã viết code** |
 | **Giá trị** | Chứng minh *tái lập được từ repo công khai*; **không** phải nghiệm thu độc lập |
 
@@ -31,6 +31,7 @@
 | A-06 | Phát hiện sửa đổi | PASS | sửa ledger = True · cắt ledger so với anchor = True · sửa catalog = True |
 | A-07 | Bề mặt API | PASS | không token store → từ chối; ẩn danh → 401; có token → 200 + `WhyWard-Verdict: PASS_WITHIN_SCOPE`; kill switch → `/readyz` 503 và `/ask` `BLOCKED_BY_POLICY` |
 | A-08 | Tài liệu không nói quá | PASS | mọi mã kiểm soát nêu trong `SECURITY.md` đều tồn tại trong `src/` |
+| A-09 | Bỏ một kiểm soát bất kỳ thì bằng chứng phải phát hiện | PASS | `10 mutations: 10 detected, 0 undetected` |
 
 Chi tiết thô (nguyên văn từ harness):
 
@@ -45,8 +46,9 @@ Chi tiết thô (nguyên văn từ harness):
 [PASS] A-06 ... ledger_edit=True truncation=True catalog=True
 [PASS] A-07 ... no_token_store_refused=True anonymous=401 health=200 authed=200
                 verdict=PASS_WITHIN_SCOPE engage=200 ready=503 blocked=200
+[PASS] A-09 ... 10 mutations: 10 detected, 0 undetected
 [PASS] A-08 ... all referenced control codes are implemented
-ACCEPTED — 8 checks passed
+ACCEPTED — 9 checks passed
 ```
 
 ## 2. Bốn kiểm tra “tự suy luận lại” (không tin harness)
@@ -65,6 +67,9 @@ exit code: 4            # NO_API_TOKENS — từ chối khởi động
 
 $ PYTHONPATH=src python3 docs/audit/reproduce_findings.py
 15 probes: 15 OK, 0 VULNERABLE
+
+$ python3 docs/acceptance/falsification_check.py
+10 mutations: 10 detected, 0 undetected
 ```
 
 ## 3. Những gì báo cáo này **không** chứng minh

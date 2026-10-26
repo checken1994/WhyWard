@@ -21,6 +21,10 @@ What it does
        ledger against an anchor — each must be detected.
     6. API checks: refuses to start without tokens, 401 without a bearer token,
        200 with scope, 503 on /readyz after the kill switch is engaged.
+    7. Mutation check: ten controls are disabled one at a time in a throwaway
+       copy; the probes must notice every removal (otherwise a green result
+       proves nothing).
+    8. Documentation-claim cross-check.
 
 Usage
     python docs/acceptance/acceptance_runner.py
@@ -483,6 +487,24 @@ def check_api(h: Harness) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 6b. Mutation check: does the evidence have teeth?
+# --------------------------------------------------------------------------- #
+def check_mutations(h: Harness) -> None:
+    started = time.time()
+    result = h.run([sys.executable, "docs/acceptance/falsification_check.py"], timeout=900)
+    tail = [line for line in result.stdout.splitlines() if "mutations:" in line]
+    h.record(
+        "A-09",
+        "Removing any single control is detected by the evidence (mutation check)",
+        result.returncode == 0,
+        "; ".join(tail) or f"returncode={result.returncode}",
+        command="python3 docs/acceptance/falsification_check.py",
+        output=result.stdout + result.stderr,
+        duration=time.time() - started,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # 7. Documentation-claim cross-check
 # --------------------------------------------------------------------------- #
 def check_claims(h: Harness) -> None:
@@ -602,6 +624,7 @@ def main(argv: list[str] | None = None) -> int:
         check_operator_journey(h)
         check_tamper(h)
         check_api(h)
+        check_mutations(h)
         check_claims(h)
     finally:
         report = render_markdown(h, provenance, args.allow_dirty)

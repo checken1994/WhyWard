@@ -6,6 +6,7 @@ build it.
 | File | Purpose |
 | --- | --- |
 | `acceptance_runner.py` | One command that decides whether the checkout behaves as documented. Black-box first: subprocesses, exit codes, files, HTTP. |
+| `falsification_check.py` | Mutation check: disables one control at a time in a throwaway copy and requires the probes to notice. |
 | `INDEPENDENCE.md` | Who counts as independent, what to run, what to publish, when to reject. |
 | `2026-10-26-nghiem-thu-tu-chay.md` | A self-run of the harness by the implementing agent — explicitly labelled **provisional**, not acceptance. |
 
@@ -21,6 +22,7 @@ build it.
 | A-06 | Tampering is detected (ledger edit, truncation, catalog edit) | The audit trail is trustworthy |
 | A-07 | API refuses anonymous access; kill switch flips readiness | The operational surface fails closed |
 | A-08 | Security doc names only controls that exist | No documentation theatre |
+| A-09 | Disabling any single control is detected (mutation check) | A green suite that stays green when the control is removed proves nothing |
 
 ## Usage
 

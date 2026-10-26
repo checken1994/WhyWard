@@ -30,7 +30,7 @@ git checkout <commit-to-accept>          # the exact commit under review
 # 2. Confirm the tree is clean; the harness refuses dirty trees by default
 git status --porcelain
 
-# 3. Run the acceptance harness
+# 3. Run the acceptance harness (includes the mutation check)
 python3 docs/acceptance/acceptance_runner.py \
   --report acceptance-report.md \
   --json acceptance-report.json
@@ -48,7 +48,8 @@ is about 20 seconds on a laptop-class machine.
 
 Accept the commit **only if all of the following hold**:
 
-1. The harness prints `ACCEPTED — 8 checks passed` and exits 0.
+1. The harness prints `ACCEPTED — 9 checks passed` and exits 0 (which includes
+   the mutation check: every single-control removal must be detected).
 2. The working tree was clean at run time (`dirty=False` in the JSON report).
 3. The commit hash in the report equals the commit under review.
 4. The reviewer's own spot checks agree — at minimum:

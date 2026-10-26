@@ -5,7 +5,7 @@
 | **Ngày** | 2026-10-26 |
 | **Phạm vi** | Thực thi lộ trình 0.1 → 0.2 trong `docs/audit/2026-10-26-danh-gia-he-thong.md` |
 | **Trạng thái** | 15/15 phát hiện đã được đóng bằng cơ chế + test âm tính + probe |
-| **Bằng chứng chạy được** | 243 test (stdlib), 15/15 probe `OK`, coverage nhánh 88 %, ruff/mypy-strict/bandit sạch |
+| **Bằng chứng chạy được** | 243 test (stdlib), 15/15 probe `OK`, 10/10 mutation bị phát hiện, coverage nhánh 88 %, ruff/mypy-strict/bandit sạch |
 | **Chưa phải** | nghiệm thu độc lập, chứng nhận bảo mật, tuyên bố production-ready |
 
 Báo cáo này chỉ ghi những gì **chạy được và kiểm lại được**. Mọi con số dưới đây
@@ -90,8 +90,11 @@ TOTAL   2972 statements   88% branch coverage   (ngưỡng: 85%)
 $ PYTHONPATH=src python3 docs/audit/reproduce_findings.py
 15 probes: 15 OK, 0 VULNERABLE
 
+$ python3 docs/acceptance/falsification_check.py
+10 mutations: 10 detected, 0 undetected
+
 $ python3 docs/acceptance/acceptance_runner.py
-ACCEPTED — 8 checks passed        (chạy trên clone sạch — xem §7)
+ACCEPTED — 9 checks passed        (chạy trên clone sạch — xem báo cáo tự chạy)
 ```
 
 Hành vi đo được trên bản chạy thật:
