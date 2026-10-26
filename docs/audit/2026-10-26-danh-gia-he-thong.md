@@ -1,3 +1,12 @@
+> **Cập nhật trạng thái (2026-10-26, WhyWard 0.2.0).** Báo cáo này giữ nguyên
+> như bản ghi lịch sử của 0.1.0. Toàn bộ 15 phát hiện (W-01 … W-15) đã được đóng
+> bằng cơ chế, test âm tính và probe tái lập; xem báo cáo triển khai
+> [`2026-10-26-bao-cao-trien-khai.md`](2026-10-26-bao-cao-trien-khai.md) và bộ
+> probe [`reproduce_findings.py`](reproduce_findings.py) (nay báo 15/15 `OK`).
+> Điểm rubric được tính lại một cách thận trọng: **≈2.0 → ≈3.5/5**, với các giới
+> hạn còn lại được liệt kê rõ (chưa nghiệm thu độc lập, chưa chạy container thật,
+> chưa review mật mã, chưa có ingestion USGS thật).
+
 # WhyWard 0.1.0 — Đánh giá hệ thống và lộ trình đạt chuẩn thế giới
 
 | | |

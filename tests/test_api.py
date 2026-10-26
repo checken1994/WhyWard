@@ -94,6 +94,7 @@ class AuthenticationTests(ApiTestBase):
         self.assertEqual(problem["code"], "MISSING_CREDENTIALS")
         self.assertEqual(problem["status"], 401)
         self.assertTrue(problem["trace_id"])
+        self.assertIn("Bearer", headers.get("WWW-Authenticate", ""))
 
     def test_invalid_token_is_rejected(self) -> None:
         status, _, payload = self.request(

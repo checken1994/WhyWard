@@ -552,6 +552,15 @@ class ControlEdgeTests(unittest.TestCase):
             self.assertFalse(decision.allowed)
             self.assertIn("EVIDENCE_STALE", [finding.code for finding in decision.findings])
 
+    def test_kill_switch_is_held_in_memory_without_a_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            control = build_control(tmp)
+            self.assertFalse(control.kill_switch_engaged())
+            control.engage_kill_switch("probe")
+            self.assertTrue(control.kill_switch_engaged())
+            control.release_kill_switch()
+            self.assertFalse(control.kill_switch_engaged())
+
     def test_kill_switch_env_variable(self) -> None:
         os.environ["WHYWARD_KILL_SWITCH"] = "1"
         try:

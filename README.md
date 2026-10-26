@@ -1,153 +1,172 @@
 # WhyWard
 
-**WhyWard** là một *boundary control plane* cho AI: một cổng kiểm soát đứng giữa AI lao động và thế giới thật.
+**WhyWard is an evidence-gated boundary control plane for AI workers.**
+It sits between a proposing model and the real world: the model may reason,
+propose and explain — it may not certify its own evidence, mint its own
+permissions, execute unbounded actions or write the audit trail.
 
-Tên gọi gồm hai phần:
+```
+worker proposes ──▶ evidence + policy gate ──▶ human approval (when required)
+                            │                            │
+                            ▼                            ▼
+                   scoped capability token ──▶ bounded execution ──▶ read-back
+                            │                            │
+                            └──────── hash-chained ledger ─────────┘
+```
 
-- **Why** — câu hỏi “Tại sao?”: vì sao cần làm, bằng chứng đâu, còn thiếu gì, nếu sai thì sao?
-- **Ward** — lớp canh giữ ở biên: AI không tự cấp quyền, tự thực thi việc nguy hiểm hoặc tự tuyên bố mình đúng.
+## Principles
 
-WhyWard thay thế hướng đi “xây một bộ não AI tổng quát khác” bằng một lõi kiểm soát nhỏ hơn:
+1. **Reality > model.** A report from a model never outranks what the system
+   actually executed and read back.
+2. **PASS ≠ correct.** `PASS_WITHIN_SCOPE` means "no blocking finding inside the
+   declared scope and evidence window", nothing more.
+3. **AI proposes, a human authorises, the core decides.** Approval is bound to a
+   specific proposal, task and review package; it expires and cannot be replayed.
+4. **Capability lives outside the worker's workspace.** Tokens are single-use,
+   bound to an action fingerprint, and revocable by a kill switch.
+5. **No unreviewed evidence.** Trust comes from a signed evidence registry, not
+   from a field a caller filled in.
+6. **Withhold rather than fabricate.** Missing, stale, unsigned or unregistered
+   evidence produces an explicit withheld verdict, never a plausible guess.
+7. **Actions are small, bounded, observable and reversible.**
+8. **WhyWard is not a source of truth.** It is a mechanism that forces a system
+   to face its own evidence and its own limits.
 
-> AI đề xuất → WhyWard kiểm tra bằng chứng và quyền → sandbox thực thi trong biên → đọc lại kết quả từ thực tế → con người quyết định việc quan trọng → ghi dấu vết có thể kiểm toán.
+## What is in 0.2.0
 
-## Nguyên tắc
+| Area | Implemented behaviour |
+| --- | --- |
+| Control plane | Deterministic task state machine, typed `GateDecision`, stable exit codes, Vietnamese/English verdict reasons |
+| Evidence | Signed `EvidenceRegistry` (HMAC envelope), freshness (`valid_until`, `review_after`, volatility class), manifest `sha256` + `record_count` enforcement, lineage counting |
+| Review | Deterministic roles (missing piece, meta/alternatives, consequence, security, observability, independence); blocking vs advisory findings |
+| Approvals | Approval package (what/why/alternatives/consequences/unknowns/rollback), expiry, signed decisions, proposal+task+package digest binding, non-replayable nonces |
+| Capability | HMAC tokens, per-action fingerprint binding, single use, SQLite-backed durable used-token store, revocable kill switch |
+| Execution | Sandboxed workspace, `read_text` / `write_text` with byte caps, read-back hash verification, symlink and traversal refusal; `run_python` disabled by default, human-gated, container backend or rlimits |
+| Ledger | JSONL hash chain, file locking for concurrent writers, fsync, checkpoints and external anchors, signature verification, signed-export report |
+| API | Local HTTP server requiring bearer tokens (sha256-stored), scopes, rate limits, body caps, security headers, `WhyWard-Verdict` header on `/ask` |
+| CLI | `ask`, `demo`, `verify-ledger`, `checkpoint`, `serve`, `status`, `keygen`, `sign`, `token`, `doctor`, `report` |
+| Observability | Structured JSON logs, counters, request IDs, `--trace-id`, OpenAPI document in `docs/api.md` |
 
-1. **Reality > model.** Báo cáo của AI không thắng được kết quả chạy thật.
-2. **PASS ≠ đúng.** PASS chỉ có nghĩa là chưa phát hiện lỗi trong phạm vi và cửa sổ quan sát đã khai báo.
-3. **AI là bên đề xuất, không phải bên tự phê duyệt.**
-4. **Quyền cấp capability nằm ngoài workspace của worker.**
-5. **Mọi fact production phải truy được nguồn và lineage.**
-6. **Chưa đủ bằng chứng thì withhold, không bịa và không fallback bừa.**
-7. **Hành động phải nhỏ, quan sát được, có giới hạn và có đường rollback.**
-8. **WhyWard không phải nguồn chân lý.** Nó là cơ chế ép hệ thống đối diện với bằng chứng và giới hạn của chính nó.
+Not claimed: production hardening of the container backend (it is optional and
+optional in CI), FIPS-grade key management, multi-tenant isolation, semantic
+matching beyond the deterministic catalog matcher. See
+[`SECURITY.md`](SECURITY.md) for the explicit non-goals and
+[`ROADMAP.md`](ROADMAP.md) for what is next.
 
-## Có gì trong bản 0.1.0?
+## Install
 
-- `ControlPlane` deterministic với state machine cho nhiệm vụ.
-- Policy gate cho tool/resource được phép và protected paths.
-- Capability token có chữ ký HMAC, giới hạn đúng action/resource, hết hạn và dùng một lần cho mỗi action.
-- Sandbox executor tối thiểu cho `write_text`, `read_text`, `run_python` trong một thư mục chỉ định, kèm read-back hash.
-- Ledger JSONL dạng hash-chain và checkpoint để neo ra ngoài.
-- Human approval gate yêu cầu ghi nhận khả năng hiểu về hành động, hậu quả và rollback.
-- Review roles dạng deterministic: missing piece, meta/alternatives, consequence, security, observability và independence.
-- `KnowledgeStore` nạp catalog JSONL có manifest/checksum thành snapshot bất biến.
-- Matcher sửa lỗi F1 kiểu cũ: hỏi Valdivia 1960 không cần biết trước đáp án 9.5; hỏi năm 2004 ở California không bị trả nhầm Sumatra.
-- CLI và local development API bằng Python standard library.
-
-Đây là **MVP kiến trúc chạy được**, không phải tuyên bố đã đạt chuẩn production security. Các giới hạn còn lại được ghi rõ trong [`SECURITY.md`](SECURITY.md) và [`ROADMAP.md`](ROADMAP.md).
-
-## Cài đặt
-
-Yêu cầu Python 3.11 trở lên.
+Python 3.11+ and no runtime dependencies.
 
 ```bash
 python -m pip install -e .
+whyward --help
 ```
 
-Hoặc chạy trực tiếp từ source:
+From source:
 
 ```bash
-PYTHONPATH=src python -m whyward.cli --help
+PYTHONPATH=src python -m whyward --help
 ```
 
-Trên Windows PowerShell:
-
-```powershell
-$env:PYTHONPATH = "src"
-python -m whyward.cli --help
-```
-
-## Chạy demo
-
-Demo tạo một file trong sandbox qua đầy đủ đường proposal → review → capability → execution → read-back, sau đó hỏi catalog mẫu về Valdivia:
+## Quick start
 
 ```bash
-PYTHONPATH=src python -m whyward.cli demo --catalog examples/catalog
-```
+# 1. governed demo: proposal → review → human-gated write → read-back → ledger
+whyward demo --workdir .whyward-demo --catalog examples/catalog
 
-Hỏi trực tiếp:
+# 2. verify the chain, then anchor it outside the workspace
+whyward verify-ledger .whyward-demo/ledger.jsonl \
+  --keyring examples/keys/demo.keyring.json --require-signature
+whyward checkpoint .whyward-demo/ledger.jsonl --anchor .whyward-demo/anchor.json \
+  --keyring examples/keys/demo.keyring.json
+whyward verify-ledger .whyward-demo/ledger.jsonl --anchor .whyward-demo/anchor.json \
+  --keyring examples/keys/demo.keyring.json
 
-```bash
-PYTHONPATH=src python -m whyward.cli ask \
-  --catalog examples/catalog \
+# 3. ask the reviewed catalog
+whyward ask --catalog examples/catalog \
   "Trận động đất Valdivia năm 1960 có độ lớn bao nhiêu?"
+
+# 4. an unanswerable question must withhold (exit 3), not guess
+whyward ask --catalog examples/catalog "Động đất năm 2004 tại California có độ lớn bao nhiêu?"
+echo $?   # 3
+
+# 5. run the authenticated API
+whyward token --subject ci --scopes ask,read,metrics --token-store .whyward-demo/tokens.json
+whyward serve --catalog examples/catalog --port 8765 --token-store .whyward-demo/tokens.json
 ```
 
-Câu không được trả nhầm Sumatra:
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | success / answered within scope |
+| 1 | refusal or failure (task failed, execution refused) |
+| 2 | integrity failure (ledger, manifest, signature, malformed input) |
+| 3 | withheld (insufficient evidence, blocked by policy, awaiting human) |
+| 4 | configuration error (missing policy, keys, tokens, no container runtime) |
+| 5 | unavailable (kill switch engaged, dependency missing) |
+
+These are part of the contract: `set -e` scripts can distinguish "I don't know"
+from "it broke".
+
+## Tests and quality gates
 
 ```bash
-PYTHONPATH=src python -m whyward.cli ask \
-  --catalog examples/catalog \
-  "Động đất năm 2004 tại California có độ lớn bao nhiêu?"
+PYTHONPATH=src:tests python -m unittest discover -s tests -t tests   # 232 tests, stdlib only
+ruff check src tests                                                 # lint
+mypy                                                                 # strict, 20 modules
+bandit -q -r src -ll                                                 # security scan, medium+
+coverage run --source=src/whyward -m pytest -q && coverage report    # gate: 85% branch
+PYTHONPATH=src python docs/audit/reproduce_findings.py               # 15 adversarial probes
 ```
 
-Kiểm tra ledger:
+Current results are recorded in
+[`docs/audit/2026-10-26-danh-gia-he-thong.md`](docs/audit/2026-10-26-danh-gia-he-thong.md)
+and [`docs/acceptance/`](docs/acceptance/).
+
+## Independent acceptance
+
+`docs/acceptance/` contains a clean-room harness plus an independence protocol.
+The rule is simple: the author of the change is not the acceptor. An independent
+reviewer (a different model or a different human) clones the repo at a pinned
+commit, runs the harness from a scratch directory, and publishes its own report
+with raw command output attached. The harness refuses to accept a run where the
+worktree is dirty, the commit is not recorded, or any probe/test fails.
 
 ```bash
-PYTHONPATH=src python -m whyward.cli verify-ledger .whyward-demo/ledger.jsonl
+python docs/acceptance/acceptance_runner.py --report /tmp/acceptance-report.md
 ```
 
-Chạy local API cho phát triển:
-
-```bash
-PYTHONPATH=src python -m whyward.cli serve --catalog examples/catalog --port 8765
-```
-
-API mẫu chỉ nên chạy local; chưa có authentication/TLS production.
-
-## Chạy test
-
-```bash
-PYTHONPATH=src python -m unittest discover -s tests -v
-```
-
-## Đánh giá độc lập và probe tấn công
-
-Bản đánh giá 2026-10-26 (điểm, phát hiện, ánh xạ chuẩn quốc tế, lộ trình) nằm ở
-[`docs/audit/2026-10-26-danh-gia-he-thong.md`](docs/audit/2026-10-26-danh-gia-he-thong.md).
-Đi kèm là bộ probe tấn công tái lập được, mỗi probe ứng với một bài test âm tính
-cần chuyển từ đỏ sang xanh trước khi dùng thật:
-
-```bash
-PYTHONPATH=src python docs/audit/reproduce_findings.py
-```
-
-Tại commit hiện tại, bộ probe báo 15/15 hành vi cần bị chặn. Đây là *bản đồ
-việc cần làm*, không phải danh sách tính năng đã có.
-
-## Kiến trúc ngắn
+## Architecture in one screen
 
 ```text
-External Root of Trust
+External root of trust
   OS identity | signing keys | external log anchor | human authority
-                         │
-                    Control Core
-          policy | capability | evidence gate | ledger
-                    ▲                  │
-          proposal/claim               │ scoped capability
-                    │                  ▼
-              AI Workers          Execution Sandbox
-                    │                  │
-                    └──── evidence ────┘
-                              │
-                    Evidence & Knowledge
-              sources | lineage | reviewed catalog
+                        │
+                   Control core
+         policy | capability | evidence gate | ledger
+                   ▲                  │
+       proposal/claim                │ scoped capability
+                   │                  ▼
+             AI workers          Execution sandbox
+                   │                  │
+                   └──── evidence ────┘
+                             │
+                   Evidence & knowledge
+             sources | lineage | reviewed catalog
 ```
 
-Chi tiết: [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Details: [`ARCHITECTURE.md`](ARCHITECTURE.md). API: [`docs/api.md`](docs/api.md).
 
-## Trạng thái dữ liệu mẫu
+## Demo data status
 
-Catalog trong `examples/catalog` là **demo fixture** để kiểm tra cơ chế matching và provenance. Hai record được đánh dấu `demo_verified`, không phải tuyên bố đã thực hiện một production ingestion mới từ USGS trong repo này. Trước khi dùng thật, phải thay bằng pipeline lấy và kiểm tra field từ nguồn chủ quản như mô tả trong roadmap.
+`examples/catalog` is a **demo fixture** used to exercise matching, provenance and
+freshness mechanics. Its two records are marked `demo_verified` and are only
+accepted by the `dev` profile. Producing a real catalog requires an ingestion
+pipeline with field-level provenance and human review, as described in the
+roadmap. Nothing in this repository claims a fresh production ingestion of
+third-party data.
 
-## Vì sao không giữ tên SCP?
+## License
 
-Tên SCP gắn với một monolith vừa làm bộ não, vừa làm expert, vừa học, vừa kiểm soát. WhyWard chọn phạm vi hẹp và rõ hơn:
-
-- Không cạnh tranh làm model thông minh nhất.
-- Dùng được với AI/agent của nhiều hãng.
-- Sở hữu lớp biên, bằng chứng, quyền và dấu vết.
-- Cho phép thay worker khi có hệ thống tốt hơn.
-
-Triết lý gốc không bị bỏ đi; nó được rút thành một sản phẩm kỹ thuật có ranh giới.
+MIT.

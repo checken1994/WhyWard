@@ -69,6 +69,6 @@
   "signature": {
     "algorithm": "hmac-sha256",
     "key_id": "policy-signing",
-    "value": "e1bfad1b3d28e74ef9b19f44e32f2322c97a8a96a06757bb1cab98dd67a26761"
+    "value": "a96dede4f5e856de1c9a2a2cc9912b821128ec41871a6214a1cfac7c508a8460"
   }
 }

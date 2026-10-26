@@ -239,6 +239,28 @@ class ApiTokenStore:
             raise AuthenticationError("Invalid API token", code="INVALID_CREDENTIALS")
         return match
 
+    def save(self, path: str | Path, *, mode: int = 0o600) -> Path:
+        """Persist only token hashes; the plaintext token is never written."""
+        import json
+        import os
+
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        entries = [
+            {
+                "token_sha256": principal.token_hash,
+                "subject": principal.subject,
+                "scopes": sorted(principal.scopes),
+            }
+            for principal in self.principals.values()
+        ]
+        payload = json.dumps({"tokens": entries}, indent=2) + "\n"
+        tmp = destination.with_name(destination.name + ".tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        os.chmod(tmp, mode)
+        tmp.replace(destination)
+        return destination
+
     @classmethod
     def from_file(cls, path: str | Path) -> ApiTokenStore:
         import json

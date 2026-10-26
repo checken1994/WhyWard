@@ -388,15 +388,20 @@ def _cmd_sign(args: argparse.Namespace) -> int:
 
 def _cmd_token(args: argparse.Namespace) -> int:
     token = generate_api_token()
-    _print_json(
-        {
-            "token": token,
-            "subject": args.subject,
-            "scopes": args.scope,
-            "usage": "Authorization: Bearer <token>",
-            "note": "Store only the token; whyward keeps a hash in memory/config.",
-        }
-    )
+    payload: dict[str, Any] = {
+        "token": token,
+        "subject": args.subject,
+        "scopes": list(args.scope or ["ask"]),
+        "usage": "Authorization: Bearer <token>",
+        "note": "The token is shown once; the store keeps only its sha256.",
+    }
+    if args.token_store:
+        store_path = Path(args.token_store)
+        store = ApiTokenStore.from_file(store_path) if store_path.exists() else ApiTokenStore()
+        store.add(token, subject=args.subject, scopes=tuple(args.scope or ["ask"]))
+        store.save(store_path)
+        payload["token_store"] = str(store_path)
+    _print_json(payload)
     return EXIT_OK
 
 
@@ -577,6 +582,7 @@ def build_parser() -> argparse.ArgumentParser:
     token = subparsers.add_parser("token", help="Generate an API bearer token")
     token.add_argument("--subject", default="local-operator")
     token.add_argument("--scope", action="append", default=None, help="scope (repeatable)")
+    token.add_argument("--token-store", default="", help="write the hashed token store here (0600)")
     token.set_defaults(func=_cmd_token)
 
     doctor = subparsers.add_parser("doctor", help="Check configuration, isolation and integrity")

@@ -133,6 +133,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(int(error.http_status))
         self.send_header("Content-Type", "application/problem+json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if int(error.http_status) == 401:
+            # RFC 7235: a 401 must advertise the challenge scheme.
+            self.send_header("WWW-Authenticate", 'Bearer realm="whyward", charset="UTF-8"')
         self._security_headers(trace_id)
         self.end_headers()
         if self.command != "HEAD":

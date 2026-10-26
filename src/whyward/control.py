@@ -260,9 +260,9 @@ class ControlPlane:
     # Kill switch
     # ------------------------------------------------------------------ #
     def kill_switch_engaged(self) -> bool:
-        if os.environ.get("WHYWARD_KILL_SWITCH") == "1":
-            return True
         if self._engaged:
+            return True
+        if os.environ.get("WHYWARD_KILL_SWITCH") == "1":
             return True
         return bool(self.kill_switch_file and self.kill_switch_file.exists())
 
