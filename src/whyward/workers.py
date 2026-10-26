@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from .models import Proposal, TaskRecord
 

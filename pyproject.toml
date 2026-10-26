@@ -4,24 +4,109 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "whyward"
-version = "0.1.0"
+version = "0.2.0"
 description = "WhyWard — an evidence-gated boundary control plane for AI workers"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "WhyWard Project" }]
-keywords = ["ai-governance", "agent-control", "evidence", "sandbox", "audit"]
+keywords = ["ai-governance", "agent-control", "evidence", "sandbox", "audit", "provenance"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
   "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Typing :: Typed",
 ]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "coverage[toml]>=7.4",
+  "mypy>=1.10",
+  "ruff>=0.6",
+  "bandit>=1.7",
+  "build>=1.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/checken1994/WhyWard"
+Documentation = "https://github.com/checken1994/WhyWard/tree/main/docs"
+Issues = "https://github.com/checken1994/WhyWard/issues"
+Security = "https://github.com/checken1994/WhyWard/security/policy"
+Changelog = "https://github.com/checken1994/WhyWard/blob/main/CHANGELOG.md"
 
 [project.scripts]
 whyward = "whyward.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+whyward = ["py.typed"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP", "S", "C4", "SIM", "RUF"]
+ignore = [
+  "N818",   # exception names are part of the public API (RateLimitExceeded, ...)
+  "UP042",  # str-enum mixins keep JSON/typing behaviour stable across 3.11-3.13
+  "S105",   # token prefixes and verdict names are not secrets
+  "S101",   # asserts are used in tests
+  "S603",   # subprocess with a controlled argv is the product
+  "S607",   # partial executable paths are explicit in isolation.py
+  "B008",   # function calls in defaults are dataclass factories
+  "RUF012", # ClassVar annotations are noise in stdlib-style code
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106", "S108", "S311", "S310", "B017", "B905"]
+"src/whyward/capability.py" = ["S311"]  # os.urandom is used, not random
+
+[tool.ruff.lint.isort]
+known-first-party = ["whyward"]
+known-third-party = ["support"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/whyward"]
+strict = true
+warn_unreachable = true
+disallow_untyped_decorators = false
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = ["whyward.api", "whyward.cli"]
+disallow_untyped_decorators = false
+
+[tool.coverage.run]
+source = ["src/whyward"]
+branch = true
+omit = ["src/whyward/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 85
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "-q"

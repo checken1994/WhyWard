@@ -4,12 +4,19 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, cast
 
-from .models import EvidenceRef
+from .canonical import digest
+from .errors import IntegrityError
+from .identity import Keyring, verify_envelope
+from .models import EvidenceRef, FreshnessState
+
+CATALOG_SCHEMA_VERSION = 2
 
 
 def normalize_text(text: str) -> str:
@@ -45,74 +52,189 @@ class LookupResult:
     value: Any = None
     reasons: tuple[str, ...] = ()
     candidates: tuple[str, ...] = ()
+    freshness: str = ""
+    dataset_digest: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         record = _thaw(self.record) if self.record is not None else None
         return {
             "status": self.status,
             "dataset_version": self.dataset_version,
+            "dataset_digest": self.dataset_digest,
             "record": record,
             "attribute": self.attribute,
             "value": self.value,
             "reasons": list(self.reasons),
             "candidates": list(self.candidates),
+            "freshness": self.freshness,
         }
 
 
 class KnowledgeStore:
     """Immutable, versioned snapshot of reviewed static facts.
 
-    JSONL shards plus a manifest are the canonical small-catalog format. A
-    search warehouse may help find evidence later, but it must not silently
-    replace this reviewed catalog as the source of truth.
+    Loading is fail-closed (audit findings W-03/W-04):
+
+    * the manifest must declare ``schema_version`` and may be signed;
+    * every shard must declare ``sha256`` (``require_checksum``);
+    * ``record_count`` must match the shard contents (``require_record_count``);
+    * freshness is evaluated on every query, not stored as decoration.
     """
 
-    def __init__(self, manifest: dict[str, Any], records: tuple[Mapping[str, Any], ...]):
-        self._manifest = _freeze(manifest)
+    def __init__(
+        self,
+        manifest: Mapping[str, Any],
+        records: tuple[Mapping[str, Any], ...],
+        *,
+        manifest_signature: Mapping[str, Any] | None = None,
+    ):
+        self._manifest = _freeze(dict(manifest))
         self._records = records
+        self._manifest_signature = dict(manifest_signature or {})
         self.dataset_version = str(manifest.get("dataset_version", "unknown"))
         self._by_id = {str(record["record_id"]): record for record in records}
         self._completeness = dict(manifest.get("completeness", {}))
+        self.dataset_digest = digest(
+            {
+                "dataset_version": self.dataset_version,
+                "records": [_thaw(record) for record in records],
+            }
+        )
+        self.signed = bool(self._manifest_signature)
 
+    # ------------------------------------------------------------------ #
+    # Loading
+    # ------------------------------------------------------------------ #
     @classmethod
-    def load(cls, catalog_dir: str | Path) -> "KnowledgeStore":
-        root = Path(catalog_dir)
+    def load(
+        cls,
+        catalog_dir: str | Path,
+        *,
+        require_checksum: bool = True,
+        require_record_count: bool = True,
+        keyring: Keyring | None = None,
+        require_signature: bool = False,
+        trust_key_ids: Iterable[str] | None = None,
+    ) -> KnowledgeStore:
+        root = Path(catalog_dir).resolve()
         manifest_path = root / "manifest.json"
         if not manifest_path.exists():
-            raise FileNotFoundError(f"Catalog manifest not found: {manifest_path}")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            raise IntegrityError(f"Catalog manifest not found: {manifest_path}", code="CATALOG_MISSING")
+        raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_manifest, Mapping):
+            raise IntegrityError("Catalog manifest must be a JSON object", code="CATALOG_INVALID")
+
+        signature = raw_manifest.get("signature")
+        manifest_body = {k: v for k, v in raw_manifest.items() if k != "signature"}
+        if signature is not None:
+            verify_envelope(
+                {"payload": manifest_body, "signature": signature},
+                keyring or Keyring.from_env(),
+                allowed_key_ids=trust_key_ids,
+            )
+        elif require_signature:
+            raise IntegrityError(
+                "Catalog manifest is unsigned but this deployment requires a signed catalog",
+                code="CATALOG_UNSIGNED",
+            )
+
+        schema_version = int(manifest_body.get("schema_version", 0))
+        if schema_version < 1 or schema_version > CATALOG_SCHEMA_VERSION:
+            raise IntegrityError(
+                f"Unsupported catalog schema_version: {schema_version}",
+                code="CATALOG_SCHEMA_UNSUPPORTED",
+            )
+        shards = manifest_body.get("shards")
+        if not isinstance(shards, list) or not shards:
+            raise IntegrityError("Catalog manifest declares no shards", code="CATALOG_INVALID")
+
         records: list[Mapping[str, Any]] = []
         seen_ids: set[str] = set()
-        for shard in manifest.get("shards", []):
+        for shard in shards:
+            if not isinstance(shard, Mapping) or "path" not in shard:
+                raise IntegrityError("Each shard needs a 'path'", code="CATALOG_INVALID")
             relative = str(shard["path"])
             shard_path = (root / relative).resolve()
-            if root.resolve() not in shard_path.parents and shard_path != root.resolve():
-                raise ValueError(f"Catalog shard escapes catalog directory: {relative}")
+            if root not in shard_path.parents and shard_path != root:
+                raise IntegrityError(f"Catalog shard escapes catalog directory: {relative}", code="CATALOG_PATH_ESCAPE")
+            if not shard_path.exists():
+                raise IntegrityError(f"Catalog shard is missing: {relative}", code="CATALOG_SHARD_MISSING")
             raw = shard_path.read_bytes()
             actual = hashlib.sha256(raw).hexdigest()
-            expected = str(shard.get("sha256", ""))
-            if expected and actual != expected:
-                raise ValueError(f"Checksum mismatch for shard {relative}")
+            expected = str(shard.get("sha256", "")).strip()
+            if not expected:
+                if require_checksum:
+                    raise IntegrityError(
+                        f"Catalog shard {relative} has no sha256 and checksums are required",
+                        code="CATALOG_UNCHECKED_SHARD",
+                    )
+            elif actual != expected:
+                raise IntegrityError(
+                    f"Checksum mismatch for shard {relative}",
+                    code="CATALOG_CHECKSUM_MISMATCH",
+                    details={"expected": expected, "actual": actual},
+                )
+            shard_records = 0
             for line_no, line in enumerate(raw.decode("utf-8").splitlines(), start=1):
                 if not line.strip():
                     continue
                 record = json.loads(line)
                 record_id = str(record.get("record_id", ""))
                 if not record_id:
-                    raise ValueError(f"Missing record_id at {relative}:{line_no}")
+                    raise IntegrityError(f"Missing record_id at {relative}:{line_no}", code="CATALOG_INVALID")
                 if record_id in seen_ids:
-                    raise ValueError(f"Duplicate record_id: {record_id}")
+                    raise IntegrityError(f"Duplicate record_id: {record_id}", code="CATALOG_DUPLICATE_RECORD")
                 seen_ids.add(record_id)
+                shard_records += 1
                 records.append(_freeze(record))
-        return cls(manifest, tuple(records))
+            declared = shard.get("record_count")
+            if require_record_count:
+                if declared is None:
+                    raise IntegrityError(
+                        f"Shard {relative} does not declare record_count",
+                        code="CATALOG_COUNT_MISSING",
+                    )
+                if int(declared) != shard_records:
+                    raise IntegrityError(
+                        f"Shard {relative} declares {declared} records but contains {shard_records}",
+                        code="CATALOG_COUNT_MISMATCH",
+                        details={"declared": int(declared), "actual": shard_records},
+                    )
+            elif declared is not None and int(declared) != shard_records:
+                raise IntegrityError(
+                    f"Shard {relative} declares {declared} records but contains {shard_records}",
+                    code="CATALOG_COUNT_MISMATCH",
+                )
+        return cls(
+            manifest_body,
+            tuple(records),
+            manifest_signature=signature if isinstance(signature, Mapping) else None,
+        )
 
+    # ------------------------------------------------------------------ #
+    # Accessors
+    # ------------------------------------------------------------------ #
     @property
     def records(self) -> tuple[Mapping[str, Any], ...]:
         return self._records
 
+    @property
+    def manifest(self) -> Mapping[str, Any]:
+        return cast(Mapping[str, Any], self._manifest)
+
+    @property
+    def completeness(self) -> Mapping[str, Any]:
+        return MappingProxyType(self._completeness)
+
     def get_by_id(self, record_id: str) -> Mapping[str, Any] | None:
         return self._by_id.get(record_id)
 
+    def is_complete_for(self, domain: str) -> bool:
+        return self._completeness.get(domain) == "complete_for_declared_scope"
+
+    # ------------------------------------------------------------------ #
+    # Matching
+    # ------------------------------------------------------------------ #
     @staticmethod
     def _contains_phrase(normalized_query: str, phrase: str) -> bool:
         phrase_norm = normalize_text(phrase)
@@ -141,14 +263,36 @@ class KnowledgeStore:
             return fact.get("value")
         return fact
 
+    @staticmethod
+    def _freshness_of(record: Mapping[str, Any], now: datetime) -> FreshnessState:
+        freshness = record.get("freshness", {})
+        if not isinstance(freshness, Mapping):
+            return FreshnessState.UNKNOWN
+        from .models import parse_iso
+
+        for key, state in (("valid_until", FreshnessState.EXPIRED), ("review_after", FreshnessState.REVIEW_OVERDUE)):
+            raw = str(freshness.get(key) or "").strip()
+            if raw:
+                try:
+                    if now > parse_iso(raw):
+                        return state
+                except ValueError:
+                    return FreshnessState.UNKNOWN
+        if freshness.get("class"):
+            return FreshnessState.CURRENT
+        return FreshnessState.UNKNOWN
+
     def answer_query(
         self,
         query: str,
         *,
         domain: str | None = None,
         accepted_review_statuses: frozenset[str] | set[str] | None = None,
+        now: datetime | None = None,
+        reject_stale: bool = True,
     ) -> LookupResult:
-        accepted = accepted_review_statuses or {"verified", "demo_verified"}
+        accepted = accepted_review_statuses or {"verified"}
+        now = now or datetime.now(UTC)
         query_norm = normalize_text(query)
         year_match = re.search(r"\b(1[0-9]{3}|20[0-9]{2})\b", query_norm)
         query_year = int(year_match.group(1)) if year_match else None
@@ -160,6 +304,8 @@ class KnowledgeStore:
 
         eligible: list[Mapping[str, Any]] = []
         rejected_review = False
+        stale_rejected = 0
+        stale_kept = 0
         for record in self._records:
             if domain and str(record.get("domain", "")) != domain:
                 continue
@@ -168,7 +314,39 @@ class KnowledgeStore:
             if status not in accepted:
                 rejected_review = True
                 continue
+            freshness = self._freshness_of(record, now)
+            if reject_stale and freshness is FreshnessState.EXPIRED:
+                stale_rejected += 1
+                continue
+            if freshness is FreshnessState.REVIEW_OVERDUE:
+                stale_kept += 1
             eligible.append(record)
+
+        if stale_rejected and not eligible:
+            return LookupResult(
+                status="INSUFFICIENT_EVIDENCE",
+                dataset_version=self.dataset_version,
+                dataset_digest=self.dataset_digest,
+                attribute=attribute,
+                reasons=(
+                    f"{stale_rejected} matching record(s) are past valid_until and were withheld (STALE_AFTER).",
+                ),
+            )
+
+        def _finish(result: LookupResult) -> LookupResult:
+            if stale_kept and result.record is not None:
+                return LookupResult(
+                    status="FOUND_STALE" if result.status.startswith("FOUND") else result.status,
+                    dataset_version=result.dataset_version,
+                    dataset_digest=result.dataset_digest or self.dataset_digest,
+                    record=result.record,
+                    attribute=result.attribute,
+                    value=result.value,
+                    reasons=(*result.reasons, "Record is past review_after; treat as stale evidence."),
+                    candidates=result.candidates,
+                    freshness=FreshnessState.REVIEW_OVERDUE.value,
+                )
+            return result
 
         if superlative and eligible:
             numeric: list[tuple[float, Mapping[str, Any]]] = []
@@ -184,31 +362,35 @@ class KnowledgeStore:
                     return LookupResult(
                         status="AMBIGUOUS",
                         dataset_version=self.dataset_version,
+                        dataset_digest=self.dataset_digest,
                         attribute="magnitude",
                         reasons=("Superlative has no unique winner in the catalog.",),
                         candidates=tuple(str(r["record_id"]) for r in winners),
                     )
                 domain_name = str(best.get("domain", domain or ""))
-                complete = self._completeness.get(domain_name) == "complete_for_declared_scope"
+                complete = self.is_complete_for(domain_name)
                 reason = (
                     "Computed from a catalog declared complete for its scope."
                     if complete
                     else "Computed only within the current catalog; the catalog is not declared globally complete."
                 )
-                return LookupResult(
-                    status="FOUND_SCOPED" if not complete else "FOUND",
-                    dataset_version=self.dataset_version,
-                    record=best,
-                    attribute="magnitude",
-                    value=best_value,
-                    reasons=(reason,),
-                    candidates=(str(best["record_id"]),),
+                return _finish(
+                    LookupResult(
+                        status="FOUND_SCOPED" if not complete else "FOUND",
+                        dataset_version=self.dataset_version,
+                        dataset_digest=self.dataset_digest,
+                        record=best,
+                        attribute="magnitude",
+                        value=best_value,
+                        reasons=(reason,),
+                        candidates=(str(best["record_id"]),),
+                    )
                 )
 
         scored: list[tuple[int, Mapping[str, Any], list[str]]] = []
         for record in eligible:
             entity = record.get("entity", {})
-            names = []
+            names: list[str] = []
             if isinstance(entity, Mapping):
                 names.extend(str(x) for x in entity.get("names", ()))
                 names.extend(str(x) for x in entity.get("aliases", ()))
@@ -247,6 +429,7 @@ class KnowledgeStore:
             return LookupResult(
                 status="INSUFFICIENT_EVIDENCE",
                 dataset_version=self.dataset_version,
+                dataset_digest=self.dataset_digest,
                 attribute=attribute,
                 reasons=(reason,),
             )
@@ -259,6 +442,7 @@ class KnowledgeStore:
             return LookupResult(
                 status="INSUFFICIENT_EVIDENCE",
                 dataset_version=self.dataset_version,
+                dataset_digest=self.dataset_digest,
                 attribute=attribute,
                 reasons=("The query does not identify a unique entity; year or place alone is insufficient.",),
                 candidates=tuple(str(item[1]["record_id"]) for item in scored[:5]),
@@ -267,6 +451,7 @@ class KnowledgeStore:
             return LookupResult(
                 status="AMBIGUOUS",
                 dataset_version=self.dataset_version,
+                dataset_digest=self.dataset_digest,
                 attribute=attribute,
                 reasons=("More than one record matches with the same strength.",),
                 candidates=tuple(str(item[1]["record_id"]) for item in tied),
@@ -275,39 +460,55 @@ class KnowledgeStore:
             return LookupResult(
                 status="AMBIGUOUS",
                 dataset_version=self.dataset_version,
+                dataset_digest=self.dataset_digest,
                 attribute=attribute,
                 reasons=("The best record does not win by a safe margin.",),
                 candidates=tuple(str(item[1]["record_id"]) for item in scored[:5]),
             )
 
         value = self._attribute_value(best, attribute) if attribute else None
-        return LookupResult(
-            status="FOUND",
-            dataset_version=self.dataset_version,
-            record=best,
-            attribute=attribute,
-            value=value,
-            reasons=tuple(best_reasons),
-            candidates=(str(best["record_id"]),),
+        return _finish(
+            LookupResult(
+                status="FOUND",
+                dataset_version=self.dataset_version,
+                dataset_digest=self.dataset_digest,
+                record=best,
+                attribute=attribute,
+                value=value,
+                reasons=tuple(best_reasons),
+                candidates=(str(best["record_id"]),),
+                freshness=self._freshness_of(best, now).value,
+            )
         )
 
+    # ------------------------------------------------------------------ #
+    # Evidence bridge
+    # ------------------------------------------------------------------ #
     def evidence_for_record(self, record: Mapping[str, Any]) -> EvidenceRef:
+        """Catalog-derived reference.
+
+        Deliberately unsigned and without a review status: the ControlPlane must
+        resolve it through the signed EvidenceRegistry before trusting it.
+        """
         evidence = record.get("evidence", {})
-        review = record.get("review", {})
         if not isinstance(evidence, Mapping):
             evidence = {}
-        if not isinstance(review, Mapping):
-            review = {}
+        entity = record.get("entity", {})
         return EvidenceRef(
             evidence_id=f"catalog:{record.get('record_id', 'unknown')}",
             source_id=str(evidence.get("source_id", "unknown")),
             lineage_id=str(evidence.get("lineage_id", evidence.get("source_id", "unknown"))),
-            title=str(record.get("entity", {}).get("canonical_name", "")) if isinstance(record.get("entity"), Mapping) else "",
+            title=str(entity.get("canonical_name", "")) if isinstance(entity, Mapping) else "",
             source_url=str(evidence.get("source_url", "")),
             observed_fields=tuple(str(x) for x in evidence.get("observed_fields", ())),
             blind_spots=tuple(str(x) for x in evidence.get("blind_spots", ())),
             retrieved_at=str(evidence.get("retrieved_at", "")),
             content_hash=str(evidence.get("content_hash", "")),
-            review_status=str(review.get("status", "unverified")),
             observation_method=str(evidence.get("observation_method", "")),
         )
+
+    def index_for_registry(self) -> tuple[Mapping[str, Any], ...]:
+        return self._records
+
+
+__all__ = ["CATALOG_SCHEMA_VERSION", "KnowledgeStore", "LookupResult", "normalize_text"]

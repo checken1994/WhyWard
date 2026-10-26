@@ -1,0 +1,19 @@
+# Keep the repository byte-stable across platforms: the catalog manifest stores
+# sha256 over exact file bytes, so a CRLF checkout would fail integrity checks.
+* text=auto eol=lf
+
+# Byte-exact fixtures: never convert line endings.
+examples/catalog/** -text
+examples/keys/** -text
+*.keyring.json -text
+
+# Windows helpers keep their native endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary artefacts.
+*.png binary
+*.jpg binary
+*.pdf binary
+*.sqlite binary
+*.sqlite3 binary

@@ -11,3 +11,8 @@ dist/
 .whyward-runtime/
 *.log
 .DS_Store
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/

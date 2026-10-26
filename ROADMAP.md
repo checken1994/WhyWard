@@ -1,68 +1,72 @@
-# Roadmap WhyWard
+# Roadmap
 
-Nguyên tắc roadmap: không tăng capability chỉ vì lập luận nghe thuyết phục. Mỗi mức phải có bằng chứng chạy thật, test âm tính và đường rollback.
+Rule: capability is not added because an argument sounds convincing. Each step
+needs running evidence, negative tests and a rollback path.
 
-## 0.1 — Boundary MVP (hiện tại)
+## 0.1 — Boundary MVP (released, superseded)
 
-- [x] ControlPlane và state machine.
-- [x] Policy/capability/read-back tối thiểu.
-- [x] Hash-chain ledger + checkpoint.
-- [x] Human comprehension gate dạng dữ liệu.
-- [x] KnowledgeStore JSONL + manifest checksum.
-- [x] Regression F1 cho Valdivia/Sumatra.
-- [x] CLI và local API tối thiểu.
+- [x] ControlPlane with a deterministic task state machine.
+- [x] Policy/capability/read-back baseline.
+- [x] Hash-chained ledger and checkpoints.
+- [x] Human comprehension recorded as data.
+- [x] JSONL catalog with manifest checksum.
+- [x] Valdivia/Sumatra matching regression.
+- [x] CLI and local API.
 
-## 0.2 — Real source ingestion
+The 2026-10-26 audit showed these guarantees were **stated but not enforced**:
+approvals were not bound to proposals, self-declared evidence was trusted,
+capabilities survived restarts, concurrent ledger writes corrupted the chain, and
+freshness was ignored. That audit is the entry criterion for 0.2.
 
-- [ ] Source registry theo domain.
-- [ ] USGS ingestion lấy field thật, lưu source record và retrieved_at.
-- [ ] Staging/quarantine và promotion workflow.
-- [ ] Freshness/completeness policy theo domain.
-- [ ] Bỏ trạng thái `demo_verified` khỏi production profile.
+## 0.2 — Enforced boundary (this release)
 
-## 0.3 — Worker adapters
+- [x] 15/15 probes in `docs/audit/reproduce_findings.py` report `OK` and run in CI.
+- [x] Approvals bound to proposal + task + package digests, expiring, signed,
+      non-replayable.
+- [x] Evidence trust moved into a signed registry; caller assertions downgraded.
+- [x] Freshness, manifest checksum/record count and lineage minimums enforced.
+- [x] Ledger: cross-process lock, fsync, anchor verification, typed failures.
+- [x] Durable single-use capability tokens; kill switch revokes live tokens.
+- [x] Authenticated API with scopes, rate limits and body caps.
+- [x] Bounded execution; `run_python` disabled by default and human-gated.
+- [x] Typed errors and stable exit codes on every CLI path.
+- [x] Quality gates: ruff, mypy strict, bandit, 85% branch coverage, probes.
+- [x] Independent acceptance harness and protocol (`docs/acceptance/`).
 
-- [ ] Adapter cho ít nhất một model API ngoài.
-- [ ] Adapter cho một coding agent ngoài ở chế độ proposal-only.
-- [ ] Ghi provider/model/version và lineage của context.
-- [ ] Benchmark so sánh worker bằng held-out tasks; không để worker tự chấm mình.
+## 0.3 — Real source ingestion
 
-## 0.4 — Execution isolation
+- [ ] Source registry per domain (owner, licence, endpoint, rate limit).
+- [ ] USGS ingestion that stores the raw source record plus field-level
+      provenance and `retrieved_at`.
+- [ ] Staging/quarantine, re-fetch checks, and promotion workflow with review.
+- [ ] Freshness and completeness policy per domain, with alerting.
+- [ ] `demo_verified` removed from production acceptance (already rejected by the
+      production profile; remove the fixture path entirely).
+- [ ] Catalog signatures produced by an ingestion key that never sits next to
+      the ingestion code.
 
-- [ ] Chạy executor bằng user/container tách biệt.
-- [ ] Resource limits và network egress ở tầng hạ tầng.
-- [ ] Credential broker theo adapter, không truyền toàn bộ env.
-- [ ] Git worktree sandbox cho patch proposal.
-- [ ] Read-back bằng test/diff/API độc lập.
+## 0.4 — Worker adapters
 
-## 0.5 — External root of trust
+- [ ] At least one external model adapter (proposal-only, no tools).
+- [ ] One coding-agent adapter in proposal-only mode.
+- [ ] Record provider, model, version and context lineage in every proposal.
+- [ ] Contract tests: a hostile adapter cannot escalate beyond the gate.
 
-- [ ] Bắt buộc ký policy/dataset/release trong profile production.
-- [ ] Tách khóa ký khỏi worker và Control Core runtime nếu khả thi.
-- [ ] Neo ledger checkpoint ra storage độc lập.
-- [ ] Quy trình khôi phục và diễn tập mất/lộ khóa.
-- [ ] Đường dừng độc lập ở tầng dịch vụ/OS.
+## 0.5 — Operational hardening
 
-## 0.6 — Human decision console
+- [ ] Asymmetric signing (Ed25519) for policies, evidence and ledger events.
+- [ ] Shared used-token store and shared kill-switch state across hosts.
+- [ ] Mandatory container backend with a pinned image digest; `run_python`
+      impossible without it in production.
+- [ ] mTLS or gateway-terminated TLS profile, with `Strict-Transport-Security`.
+- [ ] Ledger shipping to an append-only external sink on every commit point.
+- [ ] Load and chaos tests on the gate path.
+- [ ] External security review of the threat model and the crypto envelope.
 
-- [ ] Giao diện approval package bằng ngôn ngữ dễ hiểu.
-- [ ] Hiển thị disagreement, unknowns và vùng chưa kiểm chứng.
-- [ ] Hai người duyệt cho thay đổi protected boundary.
-- [ ] Decision record có thể xuất báo cáo kiểm toán.
+## Definition of done for every future phase
 
-## 0.7 — Governed self-change
-
-- [ ] Patch proposal trong branch/worktree cô lập.
-- [ ] Protected paths không cho autofix tự sửa.
-- [ ] Independent delta review và regression window.
-- [ ] Canary, rollback và đo false-fix/regression-introduced.
-
-## 1.0 — Limited operation
-
-Chỉ tuyên bố 1.0 sau khi:
-
-- audit độc lập chạy lại các kịch bản trọng yếu;
-- không còn fact production không nguồn trong domain đã bật;
-- worker không vượt được protected boundary trong adversarial tests thuộc scope;
-- rollback và kill-switch đã drill trên môi trường đích;
-- tài liệu không tuyên bố vượt phạm vi đã kiểm chứng.
+1. A negative test that fails on the previous commit and passes on the new one.
+2. A probe in `docs/audit/reproduce_findings.py` that demonstrates the boundary.
+3. Documentation updated in the same commit (README, SECURITY, ARCHITECTURE).
+4. The independent acceptance harness run by someone who did not write the code.
+5. No claim in documentation that exceeds what the tests demonstrate.
