@@ -72,6 +72,23 @@ $ python3 docs/acceptance/falsification_check.py
 10 mutations: 10 detected, 0 undetected
 ```
 
+## 2b. Bằng chứng từ máy khác (CI, không phải máy của agent)
+
+Ngoài clone sạch ở trên, cùng commit còn được chạy trên runner của GitHub — một
+máy khác, không có cache, không có venv của agent:
+
+| Job | Môi trường | Kết quả |
+|---|---|---|
+| `unit` | Ubuntu × Python 3.11, 3.12, 3.13 | ✅ 3/3 |
+| `unit` | Windows × Python 3.11, 3.12, 3.13 | ✅ 3/3 |
+| quality | Ubuntu 3.12: ruff, mypy, bandit, coverage, 15 probe | ✅ |
+| demo | Ubuntu 3.12: cài `pip install -e .`, demo → verify → anchor → report → doctor; `ask` bị giữ lại phải exit 3 | ✅ |
+| acceptance | Ubuntu 3.12: `acceptance_runner.py` + `falsification_check.py` | ✅ 9/9, 10/10 |
+
+Điểm đáng nói: ma trận Windows **thực sự bắt được 4 lỗi** (khoá SQLite rò rỉ,
+console code page, mount path dùng `\`, khoá ledger advisory). Nghĩa là việc
+chạy trên nền tảng khác không phải thủ tục hình thức — nó tìm ra lỗi thật.
+
 ## 3. Những gì báo cáo này **không** chứng minh
 
 1. **Không phải nghiệm thu độc lập** — người chạy là người viết.

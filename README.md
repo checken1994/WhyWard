@@ -112,7 +112,7 @@ from "it broke".
 ## Tests and quality gates
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s tests -t tests          # 245 tests, stdlib only
+PYTHONPATH=src python -m unittest discover -s tests -t tests          # 246 tests, stdlib only
 ruff check src tests                                                 # lint
 mypy                                                                 # strict, 20 modules
 bandit -q -r src -ll                                                 # security scan, medium+
@@ -120,12 +120,26 @@ coverage run --source=src/whyward -m pytest -q && coverage report    # gate: 85%
 PYTHONPATH=src python docs/audit/reproduce_findings.py               # 15 adversarial probes
 ```
 
-Current results (245 tests, 88% branch coverage, 15/15 probes, 9/9 acceptance
-checks and 10/10 detected mutations on a clean clone) are recorded in
+Current results (246 tests, 88% branch coverage, 15/15 probes, 10/10 detected
+mutations, 9/9 acceptance checks on a clean clone) are recorded in
 [`docs/audit/2026-10-26-bao-cao-trien-khai.md`](docs/audit/2026-10-26-bao-cao-trien-khai.md)
 and [`docs/acceptance/2026-10-26-nghiem-thu-tu-chay.md`](docs/acceptance/2026-10-26-nghiem-thu-tu-chay.md).
 The self-run report is explicitly **not** an acceptance verdict — see
 [`docs/acceptance/INDEPENDENCE.md`](docs/acceptance/INDEPENDENCE.md).
+
+### Verified environments
+
+| Environment | Result |
+| --- | --- |
+| Linux, Python 3.11 / 3.12 / 3.13 | unit matrix green (CI) |
+| Windows, Python 3.11 / 3.12 / 3.13 | unit matrix green (CI) |
+| Linux, Python 3.12, fresh runner | quality gates (ruff, mypy, bandit, coverage, probes) green |
+| Linux, Python 3.12, fresh runner | acceptance harness 9/9 + mutation check 10/10 green |
+| Linux, installed wheel from `pip install -e .` | demo, verify, anchor, report, doctor green |
+
+Windows support is not a claim: it is a job in `.github/workflows/test.yml`, and
+it caught four real portability bugs (a leaked SQLite handle, code-page dependent
+stdout, backslash container mounts, advisory file locks that silently no-op).
 
 ## Independent acceptance
 

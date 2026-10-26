@@ -5,7 +5,7 @@
 | **Ngày** | 2026-10-26 |
 | **Phạm vi** | Thực thi lộ trình 0.1 → 0.2 trong `docs/audit/2026-10-26-danh-gia-he-thong.md` |
 | **Trạng thái** | 15/15 phát hiện đã được đóng bằng cơ chế + test âm tính + probe |
-| **Bằng chứng chạy được** | 245 test (stdlib), 15/15 probe `OK`, 10/10 mutation bị phát hiện, coverage nhánh 88 %, ruff/mypy-strict/bandit sạch |
+| **Bằng chứng chạy được** | 246 test (stdlib), 15/15 probe `OK`, 10/10 mutation bị phát hiện, coverage nhánh 88 %, ruff/mypy-strict/bandit sạch |
 | **Chưa phải** | nghiệm thu độc lập, chứng nhận bảo mật, tuyên bố production-ready |
 
 Báo cáo này chỉ ghi những gì **chạy được và kiểm lại được**. Mọi con số dưới đây
@@ -66,13 +66,23 @@ Ngoài 15 phát hiện, trong lúc triển khai phát hiện thêm 3 lỗi và �
 - `format_disk`-style tool lạ, resource rỗng và mkdir lỗi từng làm lộ
   `FileExistsError` thô; nay đều là `ExecutionError` có mã.
 
+Và 4 lỗi **chỉ lộ ra khi chạy trên Windows** (do CI ma trận bắt được, không phải
+do suy đoán):
+
+| Lỗi | Hậu quả | Sửa |
+|---|---|---|
+| `SqliteUsedTokenStore` không đóng connection sau `CREATE TABLE` | File `.sqlite3` bị khoá; không xoá/copy được thư mục trên Windows | Đóng handle trong `finally` + test xoá DB để chứng minh |
+| CLI in tiếng Việt ra console Windows (cp1252) | `UnicodeEncodeError` → câu trả lời đúng biến thành exit 1 | `_force_utf8_io()` reconfigure stdout/stderr |
+| Mount path trong lệnh container dùng `\` | `docker -v \tmp\ws:/work` sai | `workspace.as_posix()` |
+| Khoá ledger chỉ dựa trên `fcntl`/`msvcrt` | Trên vài nền tảng khoá là no-op, ghi đồng thời làm hỏng chain | Khoá bằng `O_CREAT \| O_EXCL` (atomic mọi nền tảng) + timeout + phá khoá cũ |
+
 ---
 
 ## 3. Bằng chứng
 
 ```text
 $ PYTHONPATH=src python3 -m unittest discover -s tests -t tests
-Ran 245 tests in ~18s
+Ran 246 tests in ~18s
 OK
 
 $ ruff check src tests
