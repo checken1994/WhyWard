@@ -32,6 +32,9 @@ jobs:
             grep -E "^(FAIL|ERROR): " test-output.txt | head -20 | while IFS= read -r line; do
               echo "::error title=unit failure::${line}"
             done
+            grep -E "^[A-Za-z_.]*(Error|Exception)(: .*)?$" test-output.txt | sort | uniq -c | head -20 | while IFS= read -r line; do
+              echo "::error title=exception::${line}"
+            done
             tail -c 4000 test-output.txt
           fi
           exit $code
