@@ -113,7 +113,9 @@ class _FileLock:
                 self._fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 os.write(self._fd, f"{os.getpid()}\n".encode("ascii"))
                 return self
-            except FileExistsError:
+            except (FileExistsError, PermissionError):
+                # Windows reports a sharing violation (WinError 32) instead of
+                # "file exists" when another process still holds the lock file.
                 try:
                     age = time.time() - self.path.stat().st_mtime
                 except OSError:  # released between the two calls

@@ -612,6 +612,24 @@ def main(argv: list[str] | None = None) -> int:
         return ERROR_EXIT.get(exc.code, exc.exit_code)
     except BrokenPipeError:  # pragma: no cover
         return EXIT_OK
+    except Exception as exc:  # the CLI must never dump a traceback
+        # A governance tool that prints a traceback leaks internals and returns a
+        # shell-visible success path in some shells. Fail closed with a typed
+        # error; set WHYWARD_DEBUG=1 to re-raise while developing.
+        if os.environ.get("WHYWARD_DEBUG") == "1":  # pragma: no cover - developer aid
+            raise
+        print(
+            json.dumps(
+                {
+                    "error": "UNEXPECTED_ERROR",
+                    "type": type(exc).__name__,
+                    "message": str(exc)[:500],
+                    "hint": "set WHYWARD_DEBUG=1 for the traceback",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return EXIT_FAILURE
 
 
 if __name__ == "__main__":
