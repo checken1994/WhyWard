@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import tempfile
 import threading
 import unittest
-import urllib.error
-import urllib.request
 from typing import Any
 
 from support import build_control
@@ -61,17 +60,21 @@ class ApiTestBase(unittest.TestCase):
         data = raw_body
         if body is not None:
             data = json.dumps(body).encode("utf-8")
-        request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data, method=method)
+        # http.client, not urllib: urllib reads proxy settings (including the
+        # Windows registry) and would route a localhost request through a proxy.
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        request_headers = {"Content-Type": "application/json"}
         if token:
-            request.add_header("Authorization", f"Bearer {token}")
-        request.add_header("Content-Type", "application/json")
-        for name, value in (headers or {}).items():
-            request.add_header(name, value)
+            request_headers["Authorization"] = f"Bearer {token}"
+        request_headers.update(headers or {})
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                return response.status, dict(response.headers), response.read()
-        except urllib.error.HTTPError as error:
-            return error.code, dict(error.headers), error.read()
+            connection.request(method, path, body=data, headers=request_headers)
+            response = connection.getresponse()
+            payload = response.read()
+            response_headers: dict[str, str] = dict(response.getheaders())
+            return response.status, response_headers, payload
+        finally:
+            connection.close()
 
     def json_of(self, payload: bytes) -> dict[str, Any]:
         return json.loads(payload.decode("utf-8"))
@@ -195,17 +198,20 @@ class AskEndpointTests(ApiTestBase):
         try:
             statuses = []
             for _ in range(3):
-                request = urllib.request.Request(
-                    f"http://127.0.0.1:{port}/ask",
-                    data=json.dumps({"question": "Valdivia 1960?"}).encode(),
-                    method="POST",
-                )
-                request.add_header("Authorization", f"Bearer {self.ask_token}")
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
                 try:
-                    with urllib.request.urlopen(request, timeout=5) as response:
-                        statuses.append(response.status)
-                except urllib.error.HTTPError as error:
-                    statuses.append(error.code)
+                    connection.request(
+                        "POST",
+                        "/ask",
+                        body=json.dumps({"question": "Valdivia 1960?"}).encode(),
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {self.ask_token}",
+                        },
+                    )
+                    statuses.append(connection.getresponse().status)
+                finally:
+                    connection.close()
             self.assertIn(429, statuses)
         finally:
             limiter_server.shutdown()

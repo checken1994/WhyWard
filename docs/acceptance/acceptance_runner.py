@@ -51,8 +51,7 @@ import tempfile
 import textwrap
 import threading
 import time
-import urllib.error
-import urllib.request
+import http.client
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -417,20 +416,24 @@ def check_api(h: Harness) -> None:
     server = make_server(control, host="127.0.0.1", port=0, tokens=tokens)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
+        port = server.server_address[1]
+
         def call(path: str, *, method: str = "GET", body: bytes | None = None, token_value: str | None = None):
+            # http.client avoids proxy discovery (urllib consults the Windows
+            # registry) so a local probe can never be routed through a proxy.
             headers = {}
             if token_value:
                 headers["Authorization"] = f"Bearer {token_value}"
             if body is not None:
                 headers["Content-Type"] = "application/json"
-            request = urllib.request.Request(base + path, data=body, method=method, headers=headers)
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
             try:
-                with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310 - local
-                    return response.status, response.read().decode("utf-8"), dict(response.headers)
-            except urllib.error.HTTPError as exc:
-                return exc.code, exc.read().decode("utf-8"), dict(exc.headers)
+                connection.request(method, path, body=body, headers=headers)
+                response = connection.getresponse()
+                return response.status, response.read().decode("utf-8"), {k: v for k, v in response.getheaders()}
+            finally:
+                connection.close()
 
         anonymous_status, _, anonymous_headers = call("/ask", method="POST", body=b'{"question":"x"}')
         health_status, _, _ = call("/healthz")
