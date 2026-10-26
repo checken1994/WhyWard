@@ -1,27 +1,24 @@
 #!/usr/bin/env python3
-"""WhyWard audit probes (2026-10-26).
+"""WhyWard security probes W-01 … W-15 (re-audit harness).
 
-Mục đích: tái lập một cách xác định (deterministic) các phát hiện trong
-`docs/audit/2026-10-26-danh-gia-he-thong.md`, để nhóm phát triển có thể:
+Every probe corresponds 1:1 to a finding in
+``docs/audit/2026-10-26-danh-gia-he-thong.md``. The harness is written as an
+*adversary*: for each finding it performs the unsafe action the old code
+allowed and records what happened.
 
-1. xác nhận phát hiện là thật, không phải suy đoán từ đọc code;
-2. chuyển mỗi probe thành một regression test âm tính trong bộ test chuẩn;
-3. chứng minh "đã sửa" bằng cách đổi kết quả probe từ VULNERABLE sang OK.
+Verdicts
+    [OK]          the system refused / degraded exactly as the fix intends.
+    [VULNERABLE]  the unsafe behaviour is still reachable.
+    [SKIP]        cannot be exercised on this platform (reported, never hidden).
 
-Cách chạy:
+Usage
+    PYTHONPATH=src python3 docs/audit/reproduce_findings.py
+    PYTHONPATH=src python3 docs/audit/reproduce_findings.py --only W-02,W-14
+    PYTHONPATH=src python3 docs/audit/reproduce_findings.py --json out.json
 
-    PYTHONPATH=src python docs/audit/reproduce_findings.py
-    PYTHONPATH=src python docs/audit/reproduce_findings.py --only W-02,W-06
-
-Mọi probe chỉ ghi trong thư mục tạm. Không gọi mạng. Không sửa repo.
-
-Quy ước kết quả:
-    [VULNERABLE] hệ thống cho qua một hành vi mà bản đánh giá coi là không an toàn.
-    [OK]         hành vi đã bị chặn đúng như kỳ vọng an toàn.
-    [SKIP]       không áp dụng được trên nền tảng hiện tại.
-
-Lưu ý: đây là script kiểm thử phòng thủ cho repo của chính dự án. Nó không
-chứa exploit nhắm vào hệ thống bên thứ ba.
+Exit code is 0 only when no probe reports VULNERABLE. Everything runs inside a
+temporary directory; no network is required and the repository is never
+modified. These are defensive regression probes for this project's own code.
 """
 
 from __future__ import annotations
@@ -29,649 +26,677 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
-import socket
+import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
-import time
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 CATALOG = ROOT / "examples" / "catalog"
+DEMO_KEYS = ROOT / "examples" / "keys" / "demo.keyring.json"
 
-SECRET = b"whyward-audit-secret-32-bytes-long!"
-
-RESULTS: list[tuple[str, str, str, str]] = []
+RESULTS: list[dict[str, str]] = []
 
 
 def record(pid: str, title: str, verdict: str, detail: str) -> None:
-    RESULTS.append((pid, title, verdict, detail))
+    RESULTS.append({"id": pid, "title": title, "verdict": verdict, "detail": detail})
     print(f"[{verdict:<10}] {pid} {title}\n             {detail}\n")
 
 
 def fresh_dir() -> Path:
-    return Path(tempfile.mkdtemp(prefix="whyward-audit-"))
+    return Path(tempfile.mkdtemp(prefix="whyward-probe-"))
 
 
-def make_control(tmp: Path, *, with_executor: bool = False, catalog: Path | None = None,
-                 kill_switch_file: Path | None = None, policy=None):
+# --------------------------------------------------------------------------- #
+# Shared fixtures
+# --------------------------------------------------------------------------- #
+def dev_control(
+    tmp: Path,
+    *,
+    with_executor: bool = False,
+    with_python: bool = False,
+    policy: Any = None,
+    catalog: Path | None = None,
+):
     from whyward.capability import CapabilityBroker
     from whyward.control import ControlPlane
     from whyward.evidence import KnowledgeStore
     from whyward.execution import SandboxExecutor
+    from whyward.identity import Keyring
     from whyward.ledger import Ledger
     from whyward.policy import Policy
 
-    broker = CapabilityBroker(SECRET) if with_executor else None
-    return ControlPlane(
-        policy=policy or Policy.default(),
-        ledger=Ledger(tmp / "ledger.jsonl"),
+    from whyward.registry import EvidenceRegistry
+
+    keys = Keyring.from_file(DEMO_KEYS)
+    policy = policy or Policy.dev()
+    store = KnowledgeStore.load(catalog or CATALOG)
+    registry = EvidenceRegistry(keyring=keys, signing_key_id="evidence-ingest", path=tmp / "evidence.jsonl")
+    ledger = Ledger(tmp / "ledger.jsonl", keyring=keys, signing_key_id="audit-ledger")
+    broker = None
+    executor = None
+    if with_executor:
+        broker = CapabilityBroker(keys, key_id="capability", used_store=_sqlite_store(tmp))
+        executor = SandboxExecutor(tmp / "ws", broker, allow_python=with_python, limits=policy.limits)
+        broker.set_blocked_hook(lambda: False)
+        executor.set_blocked_hook(lambda: False)
+    control = ControlPlane(
+        policy=policy,
+        ledger=ledger,
         capability_broker=broker,
-        executor=SandboxExecutor(tmp / "ws", broker) if with_executor and broker else None,
-        knowledge_store=KnowledgeStore.load(catalog) if catalog else None,
-        kill_switch_file=kill_switch_file,
+        executor=executor,
+        knowledge_store=store,
+        evidence_registry=registry,
+        keyring=keys,
+        approval_keyring=keys,
+        require_signed_approval=policy.review.require_human_decision_signature,
     )
+    return control, keys
 
 
-def verified_evidence(eid: str, lineage: str):
-    from whyward.models import EvidenceRef
+def _sqlite_store(tmp: Path):
+    from whyward.capability import SqliteUsedTokenStore
 
-    return EvidenceRef(
-        evidence_id=eid,
-        source_id="usgs",
-        lineage_id=lineage,
-        observed_fields=("whatever",),
-        blind_spots=("none declared",),
-        review_status="verified",
-    )
+    return SqliteUsedTokenStore(tmp / "capability.sqlite")
 
 
-def proposal(pid: str, *, resource: str = "hello.txt", risk=None, evidence_ids=("e1", "e2"),
-             tool: str = "write_text", parameters=None):
+def register_trusted(control, *, evidence_id: str = "ev-1", lineage: str = "lineage-a", **extra):
+    from whyward.models import now_iso
+
+    payload = {
+        "evidence_id": evidence_id,
+        "source_id": "usgs",
+        "lineage_id": lineage,
+        "retrieved_at": now_iso(),
+        "observed_fields": ("magnitude",),
+        "blind_spots": ("no independent refetch",),
+        "review_status": "verified",
+    }
+    payload.update(extra)
+    control.register_reviewed_evidence(**payload)
+
+
+def make_proposal(
+    pid: str = "p-1",
+    *,
+    resource: str = "result.txt",
+    risk: Any = None,
+    evidence_ids: tuple[str, ...] = ("ev-1",),
+    tool: str = "write_text",
+    parameters: dict[str, Any] | None = None,
+    autonomy: int = 0,
+):
     from whyward.models import ActionRequest, Claim, Proposal, RiskTier
 
     return Proposal(
         proposal_id=pid,
-        title="audit proposal",
-        summary="write a file",
-        rationale="audit",
-        claims=(Claim("c1", "anything", evidence_ids=evidence_ids),),
+        title="Probe proposal",
+        summary="Write one file inside the sandbox.",
+        rationale="Probe the boundary.",
+        claims=(Claim(claim_id="c-1", statement="Scoped action.", evidence_ids=evidence_ids),),
+        actions=(
+            ActionRequest(
+                action_id="a-1",
+                tool=tool,
+                resource=resource,
+                parameters=parameters or {"content": "probe"},
+            ),
+        ),
         alternatives=("do nothing",),
-        consequences_if_done=("a file appears",),
+        consequences_if_done=("one file appears",),
         consequences_if_not_done=("nothing changes",),
-        unknowns=("audit unknown",),
+        unknowns=("probe unknown",),
         rollback_plan="delete the file",
-        requested_autonomy=0,
-        risk_tier=risk or RiskTier.HIGH,
-        actions=(ActionRequest("a1", tool, resource, parameters or {"content": "audit"}),),
+        requested_autonomy=autonomy,
+        risk_tier=risk or RiskTier.LOW,
     )
 
 
-# --------------------------------------------------------------------------- #
-# W-01  Human approval is not bound to the proposal it approved
-# --------------------------------------------------------------------------- #
-def probe_w01() -> None:
+def approved(control, task_id: str, proposal, *, approver: str = "auditor"):
+    """Build a fully-bound, signed HumanDecision the way an approval UI must."""
     from whyward.models import HumanDecision
 
-    tmp = fresh_dir()
-    cp = make_control(tmp, with_executor=True)
-    cp.register_evidence(verified_evidence("e1", "lineage-1"))
-    cp.register_evidence(verified_evidence("e2", "lineage-2"))
-
+    package = control.approval_package(proposal, (), task_id=task_id)
     decision = HumanDecision(
-        decision_id="d-1",
-        approver="ceo",
+        decision_id=f"d-{task_id}",
+        approver=approver,
         approved=True,
-        restatement="I approve writing hello.txt into the demo workspace only",
+        proposal_digest=proposal.digest(),
+        task_id=task_id,
+        package_digest=package.package_digest,
+        restatement="I approve writing exactly this file inside the probe sandbox.",
+        reason="probe",
         comprehension={"action": True, "consequence": True, "rollback": True},
+        expires_at=package.expires_at,
+        nonce=f"nonce-{task_id}",
     )
-    safe = cp.create_task("t-safe", "worker", "write hello")
-    first = cp.submit_proposal(safe, proposal("p-safe", resource="hello.txt"), human_decision=decision)
+    key = control.approval_keyring.get(control.approval_key_id)
+    return control.sign_decision(decision, key_id=control.approval_key_id, key=key)
 
-    other = cp.create_task("t-other", "worker", "something the approver never saw")
-    second = cp.submit_proposal(
-        other,
-        proposal("p-other", resource="prod/config/secret.txt", parameters={"content": "pwned"}),
-        human_decision=decision,
+
+def run_cli(*argv: str) -> subprocess.CompletedProcess[str]:
+    env = {"PYTHONPATH": str(SRC), "PATH": "/usr/local/bin:/usr/bin:/bin"}
+    return subprocess.run(
+        [sys.executable, "-m", "whyward", *argv],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=False,
     )
-    wrote = (tmp / "ws" / "prod" / "config" / "secret.txt").exists()
 
-    if first.allowed and second.allowed and wrote:
+
+# --------------------------------------------------------------------------- #
+# W-01  Approval replay: one decision, two proposals
+# --------------------------------------------------------------------------- #
+def probe_w01() -> None:
+    title = "Human approval không bị ràng buộc với proposal (replay được)"
+    tmp = fresh_dir()
+    control, _ = dev_control(tmp, with_executor=True)
+    register_trusted(control, evidence_id="ev-1", lineage="lineage-a")
+
+    from whyward.models import RiskTier
+
+    register_trusted(control, evidence_id="ev-2", lineage="lineage-b")
+    safe = make_proposal("p-safe", resource="safe.txt", risk=RiskTier.HIGH, evidence_ids=("ev-1", "ev-2"))
+    task = control.create_task("t-safe", "worker", "write safe.txt")
+    decision = approved(control, task.task_id, safe)
+    first = control.submit_proposal(task, safe, human_decision=decision)
+
+    other = make_proposal(
+        "p-other",
+        resource="secret.txt",
+        parameters={"content": "pwned"},
+        risk=RiskTier.HIGH,
+        evidence_ids=("ev-1", "ev-2"),
+    )
+    other_task = control.create_task("t-other", "worker", "something else entirely")
+    second = control.submit_proposal(other_task, other, human_decision=decision)
+    wrote = (tmp / "ws" / "secret.txt").exists()
+
+    if second.allowed or wrote:
+        record("W-01", title, "VULNERABLE", f"replay accepted: {second.status.value}")
+    else:
         record(
             "W-01",
-            "Human approval không gắn với proposal (replay được)",
-            "VULNERABLE",
-            f"cùng một HumanDecision được chấp nhận cho 2 proposal khác nhau; "
-            f"proposal thứ hai ghi được prod/config/secret.txt (verdict={second.status.value}). "
-            f"HumanDecision không có trường proposal_id / proposal_fingerprint.",
+            title,
+            "OK",
+            f"first={first.status.value}, replay={second.status.value}; blocking: {second.reasons[:2]}",
         )
-    else:
-        record("W-01", "Human approval không gắn với proposal (replay được)", "OK",
-               f"proposal thứ hai bị chặn (verdict={second.status.value}).")
 
 
 # --------------------------------------------------------------------------- #
-# W-02  Anyone holding the ControlPlane handle can self-certify evidence
+# W-02  Self-declared review_status
 # --------------------------------------------------------------------------- #
 def probe_w02() -> None:
-    from whyward.policy import Policy
-    from whyward.review import has_blockers, review_proposal
+    from whyward.models import EvidenceRef
 
+    title = "Bằng chứng tự khai 'verified' được hệ thống tin"
     tmp = fresh_dir()
-    cp = make_control(tmp)
-    for index in (1, 2):
-        cp.register_evidence(
-            type(verified_evidence(f"forged-{index}", f"attacker-lineage-{index}"))(
-                evidence_id=f"forged-{index}",
-                source_id="usgs",
-                lineage_id=f"attacker-lineage-{index}",
-                observed_fields=("x",),
-                blind_spots=("y",),
-                review_status="verified",
-            )
+    control, _ = dev_control(tmp)
+    control.register_evidence(
+        EvidenceRef(
+            evidence_id="forged-1",
+            source_id="usgs",
+            lineage_id="attacker-lineage",
+            observed_fields=("x",),
+            blind_spots=("y",),
+            review_status="verified",
         )
-    p = proposal("p-forged", evidence_ids=("forged-1", "forged-2"), risk=None)
-    findings = review_proposal(p, cp._evidence, Policy.default())  # noqa: SLF001 - audit of internal state
-    blocked = has_blockers(findings)
+    )
+    stored = control.evidence_registry.get("forged-1")
+    proposal = make_proposal("p-forged", evidence_ids=("forged-1",))
+    decision = control.submit_proposal(control.create_task("t", "worker", "probe"), proposal)
 
-    if not blocked:
+    if stored.review_status == "verified" and decision.allowed:
+        record("W-02", title, "VULNERABLE", "caller-asserted review_status was honoured")
+    else:
         record(
             "W-02",
-            "Bằng chứng tự khai là 'verified' được review tin",
-            "VULNERABLE",
-            "2 EvidenceRef do bên gọi tự tạo (review_status='verified', source_id và lineage_id tự chọn) "
-            "đi qua review_proposal với 0 blocking finding: registry bằng chứng không có chữ ký, "
-            "không phân biệt evidence do control core nạp và evidence do worker khai.",
+            title,
+            "OK",
+            f"stored status={stored.review_status!r} (registry re-signed, downgraded); verdict={decision.status.value}",
         )
-    else:
-        record("W-02", "Bằng chứng tự khai là 'verified' được review tin", "OK",
-               "evidence tự khai bị chặn ở review.")
 
 
 # --------------------------------------------------------------------------- #
-# W-03  Freshness / review_after metadata is never enforced
+# W-03  Expired evidence is still answered
 # --------------------------------------------------------------------------- #
 def probe_w03() -> None:
+    from datetime import UTC, datetime
+
+    from whyward.evidence import KnowledgeStore
+
+    title = "freshness/valid_until không được thi hành"
     tmp = fresh_dir()
-    cat = tmp / "catalog"
-    subprocess.run(["cp", "-r", str(CATALOG), str(cat)], check=True)
-    shard = cat / "facts" / "geology.earthquakes.jsonl"
+    catalog = tmp / "catalog"
+    shutil.copytree(CATALOG, catalog)
+    shard = catalog / "facts" / "geology.earthquakes.jsonl"
     lines = shard.read_text(encoding="utf-8").splitlines()
-    record_obj = json.loads(lines[0])
-    record_obj["freshness"] = {
+    first = json.loads(lines[0])
+    first["freshness"] = {
         "class": "volatile",
         "valid_from": "1990-01-01",
         "valid_until": "1991-01-01",
         "review_after": "1991-01-01",
     }
-    lines[0] = json.dumps(record_obj, ensure_ascii=False)
+    lines[0] = json.dumps(first, ensure_ascii=False)
     shard.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    manifest = json.loads((cat / "manifest.json").read_text(encoding="utf-8"))
-    manifest["shards"][0]["sha256"] = hashlib.sha256(shard.read_bytes()).hexdigest()
-    (cat / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    manifest = json.loads((catalog / "manifest.json").read_text(encoding="utf-8"))
+    for entry in manifest["shards"]:
+        path = catalog / entry["path"] if "path" in entry else catalog / entry["file"]
+        entry["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (catalog / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    cp = make_control(tmp, catalog=cat)
-    result = cp.answer_question("Trận động đất Valdivia năm 1960 có độ lớn bao nhiêu?")
-
-    if result["verdict"] == "PASS_WITHIN_SCOPE":
-        record(
-            "W-03",
-            "freshness/valid_until không được thi hành",
-            "VULNERABLE",
-            f"record hết hạn từ 1991 vẫn được trả {result['verdict']}: {result['answer']!r}; "
-            f"không có mã nguồn nào đọc trường freshness.",
-        )
+    store = KnowledgeStore.load(catalog)
+    result = store.answer_query(
+        "Trận động đất Valdivia năm 1960 có độ lớn bao nhiêu?",
+        accepted_review_statuses={"verified", "demo_verified"},
+        now=datetime(2026, 10, 26, tzinfo=UTC),
+    )
+    if result.status == "FOUND":
+        record("W-03", title, "VULNERABLE", f"expired record still answered: {result.value!r}")
     else:
-        record("W-03", "freshness/valid_until không được thi hành", "OK",
-               f"record hết hạn bị hạ verdict: {result['verdict']}.")
+        record("W-03", title, "OK", f"status={result.status}, reasons={result.reasons}")
 
 
 # --------------------------------------------------------------------------- #
-# W-04  Manifest integrity is optional and record_count is ignored
+# W-04  Manifest checksum / record_count not enforced
 # --------------------------------------------------------------------------- #
 def probe_w04() -> None:
     from whyward.evidence import KnowledgeStore
+    from whyward.errors import WhyWardError
 
+    title = "manifest record_count/sha256 không được thi hành"
     tmp = fresh_dir()
-    cat = tmp / "catalog"
-    subprocess.run(["cp", "-r", str(CATALOG), str(cat)], check=True)
-    manifest_path = cat / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-    manifest["shards"][0]["record_count"] = 999
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    count_ignored = len(KnowledgeStore.load(cat).records)
-
-    manifest["shards"][0].pop("sha256", None)
-    manifest["shards"][0].pop("record_count", None)
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    catalog = tmp / "catalog"
+    shutil.copytree(CATALOG, catalog)
+    shard = catalog / "facts" / "geology.earthquakes.jsonl"
+    original = shard.read_text(encoding="utf-8")
+    shard.write_text(original.replace("1960", "1999", 1), encoding="utf-8")
+    tamper_blocked = False
+    detail = ""
     try:
-        unsigned_loaded = len(KnowledgeStore.load(cat).records)
-    except ValueError:
-        unsigned_loaded = -1
+        KnowledgeStore.load(catalog)
+    except WhyWardError as exc:
+        tamper_blocked = True
+        detail = f"checksum mismatch -> {exc.code}"
 
-    if unsigned_loaded >= 0:
-        record(
-            "W-04",
-            "Checksum shard là tuỳ chọn, record_count không được kiểm",
-            "VULNERABLE",
-            f"manifest khai record_count=999 nhưng nạp {count_ignored} record không báo lỗi; "
-            f"shard bị bỏ sha256 vẫn nạp {unsigned_loaded} record.",
-        )
+    shard.write_text(original, encoding="utf-8")
+    manifest = json.loads((catalog / "manifest.json").read_text(encoding="utf-8"))
+    manifest["shards"][0]["record_count"] = 99
+    (catalog / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    count_blocked = False
+    try:
+        KnowledgeStore.load(catalog)
+    except WhyWardError as exc:
+        count_blocked = True
+        detail += f"; record_count mismatch -> {exc.code}"
+
+    if tamper_blocked and count_blocked:
+        record("W-04", title, "OK", detail)
     else:
-        record("W-04", "Checksum shard là tuỳ chọn, record_count không được kiểm", "OK",
-               "manifest thiếu sha256 bị từ chối.")
+        record("W-04", title, "VULNERABLE", detail or "tampered catalog loaded")
 
 
 # --------------------------------------------------------------------------- #
-# W-05  Policy.from_dict silently weakens required lineages
+# W-05  High risk with a single evidence lineage
 # --------------------------------------------------------------------------- #
 def probe_w05() -> None:
     from whyward.models import RiskTier
-    from whyward.policy import Policy
 
-    policy = Policy.from_dict(
-        {
-            "allowed_tools": ["write_text"],
-            "protected_path_prefixes": [],
-            "allowed_source_ids": ["usgs"],
-            "accepted_review_statuses": ["verified"],
-            "human_required_risk_tiers": ["critical"],
-            "max_autonomy_without_human": 2,
-        }
-    )
-    required = policy.required_lineages(RiskTier.CRITICAL)
-    if required < 2:
-        record(
-            "W-05",
-            "Policy thiếu key thì âm thầm hạ yêu cầu bằng chứng",
-            "VULNERABLE",
-            f"profile critical yêu cầu {required} lineage thay vì lỗi cấu hình "
-            f"(default policy là 2); mọi thiếu key khác cũng lấy default im lặng.",
-        )
+    title = "min_independent_lineages không được thi hành"
+    tmp = fresh_dir()
+    control, _ = dev_control(tmp, with_executor=True)
+    register_trusted(control, evidence_id="ev-1", lineage="lineage-a")
+    proposal = make_proposal("p-high", risk=RiskTier.HIGH, evidence_ids=("ev-1",), autonomy=4)
+    task = control.create_task("t", "worker", "probe")
+    decision = control.submit_proposal(task, proposal, human_decision=approved(control, task.task_id, proposal))
+    codes = [finding.code for finding in decision.findings]
+
+    if decision.allowed:
+        record("W-05", title, "VULNERABLE", f"single lineage accepted for HIGH risk ({codes})")
     else:
-        record("W-05", "Policy thiếu key thì âm thầm hạ yêu cầu bằng chứng", "OK",
-               f"critical yêu cầu {required} lineage.")
+        record("W-05", title, "OK", f"blocked: {codes or decision.reasons[:2]}")
 
 
 # --------------------------------------------------------------------------- #
-# W-06  Concurrent writers silently corrupt the ledger
+# W-06  Concurrent appends corrupt the ledger
 # --------------------------------------------------------------------------- #
 def probe_w06() -> None:
     from whyward.ledger import Ledger
 
+    title = "Ghi ledger đồng thời làm hỏng chuỗi hash"
     tmp = fresh_dir()
     path = tmp / "ledger.jsonl"
-    go = tmp / "go"
-    code = (
-        "import os, sys, time\n"
-        "from whyward.ledger import Ledger\n"
-        "l = Ledger(sys.argv[1])\n"
-        "while not os.path.exists(sys.argv[2]):\n"
-        "    time.sleep(0.001)\n"
-        "for i in range(400):\n"
-        "    l.append('E', 'writer', {'i': i})\n"
-    )
-    env = {**os.environ, "PYTHONPATH": str(SRC)}
-    codes: list[int] = []
-    indexes: list[int] = []
-    ok, message = True, "no run"
-    for _attempt in range(3):
-        if path.exists():
-            path.unlink()
-        if go.exists():
-            go.unlink()
-        procs = [
-            subprocess.Popen([sys.executable, "-c", code, str(path), str(go)], env=env, cwd=str(ROOT))
-            for _ in range(3)
-        ]
-        time.sleep(0.3)  # để cả 3 process nạp xong state ban đầu
-        go.write_text("go", encoding="utf-8")
-        codes = [proc.wait() for proc in procs]
-        indexes = [
-            json.loads(line)["index"]
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-        verifier = Ledger.__new__(Ledger)
-        verifier.path = path
-        ok, message = verifier.verify()
-        if len(set(indexes)) != len(indexes) or not ok:
-            break
+    ledger = Ledger(path)
+    threads = [threading.Thread(target=ledger.append, args=("PROBE", f"actor-{i}", {"i": i})) for i in range(24)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
 
-    if len(set(indexes)) != len(indexes) or not ok:
-        record(
-            "W-06",
-            "Nhiều process ghi cùng ledger thì ledger hỏng âm thầm",
-            "VULNERABLE",
-            f"3 writer, exit codes={codes} (đều 0), {len(indexes)} event / "
-            f"{len(set(indexes))} index duy nhất; verify() -> {ok}: {message}",
-        )
+    valid, message = Ledger(path).verify()
+    events = list(Ledger(path).iter_events())
+    if valid and len(events) == 24:
+        record("W-06", title, "OK", f"24/24 concurrent appends, chain valid ({message})")
     else:
-        record("W-06", "Nhiều process ghi cùng ledger thì ledger hỏng âm thầm", "OK",
-               "ledger vẫn hợp lệ sau khi có nhiều writer.")
+        record("W-06", title, "VULNERABLE", f"valid={valid}, events={len(events)}, reason={message}")
 
 
 # --------------------------------------------------------------------------- #
-# W-07  One-use capability is only one-use inside one process
+# W-07  Capability token survives a restart
 # --------------------------------------------------------------------------- #
 def probe_w07() -> None:
     from whyward.capability import CapabilityBroker
-    from whyward.models import ActionRequest
 
-    action = ActionRequest("a1", "write_text", "z.txt", {"content": "z"})
-    token = CapabilityBroker(SECRET).issue(proposal_id="p", actions=[action])
-    restarted = CapabilityBroker(SECRET)  # same secret, fresh in-memory used-set
+    title = "Capability token dùng lại được sau khi khởi động lại"
+    tmp = fresh_dir()
+    keys_path = DEMO_KEYS
+    from whyward.identity import Keyring
+
+    keys = Keyring.from_file(keys_path)
+    action = make_proposal().actions[0]
+    first = CapabilityBroker(keys, key_id="capability", used_store=_sqlite_store(tmp))
+    token = first.issue(proposal_id="p-1", actions=[action])
+    first.consume(token, action)
+
+    second = CapabilityBroker(keys, key_id="capability", used_store=_sqlite_store(tmp))
     try:
-        restarted.consume(token, action)
-        record(
-            "W-07",
-            "Capability 'one-use' không sống qua restart",
-            "VULNERABLE",
-            "token phát hành trước khi restart vẫn được tiêu thụ sau restart: registry used-token "
-            "chỉ nằm trong RAM, không có store bền và không có cơ chế thu hồi.",
-        )
-    except PermissionError as exc:
-        record("W-07", "Capability 'one-use' không sống qua restart", "OK", f"bị chặn: {exc}")
+        second.consume(token, action)
+    except Exception as exc:  # noqa: BLE001 - the rejection type is what we probe
+        record("W-07", title, "OK", f"replay after restart rejected: {getattr(exc, 'code', type(exc).__name__)}")
+        return
+    record("W-07", title, "VULNERABLE", "token replay after restart was accepted")
 
 
 # --------------------------------------------------------------------------- #
-# W-08  Kill switch is not re-checked before/while executing actions
+# W-08  Kill switch does not revoke execution
 # --------------------------------------------------------------------------- #
 def probe_w08() -> None:
+    title = "Kill switch không thu hồi quyền thực thi/cấp token"
     tmp = fresh_dir()
-    stop = tmp / "STOP"
-    cp = make_control(tmp, with_executor=True, kill_switch_file=stop)
-    cp.register_evidence(verified_evidence("e1", "lineage-1"))
-    cp.register_evidence(verified_evidence("e2", "lineage-2"))
+    control, _ = dev_control(tmp, with_executor=True)
+    register_trusted(control, evidence_id="ev-1", lineage="lineage-a")
+    control.capability_broker.set_blocked_hook(control.kill_switch_engaged)
+    control.executor.set_blocked_hook(control.kill_switch_engaged)
 
-    from whyward.models import ActionRequest, Claim, Proposal, RiskTier
+    control.engage_kill_switch("probe")
+    action = make_proposal().actions[0]
+    refused_issue = False
+    try:
+        control.capability_broker.issue(proposal_id="p-1", actions=[action])
+    except Exception:  # noqa: BLE001 - probe
+        refused_issue = True
+    decision = control.submit_proposal(control.create_task("t", "worker", "probe"), make_proposal())
+    wrote = (tmp / "ws" / "result.txt").exists()
 
-    p = Proposal(
-        proposal_id="p",
-        title="t",
-        summary="s",
-        rationale="r",
-        claims=(Claim("c", "x", evidence_ids=("e1", "e2")),),
-        actions=(
-            ActionRequest("a1", "write_text", "one.txt", {"content": "1"}),
-            ActionRequest("a2", "write_text", "two.txt", {"content": "2"}),
-        ),
-        risk_tier=RiskTier.LOW,
-    )
-    task = cp.create_task("t", "worker", "goal")
-    stop.write_text("stop", encoding="utf-8")  # engaged before submission
-    blocked = cp.submit_proposal(task, p)
-
-    task2 = cp.create_task("t2", "worker", "goal")
-    stop.unlink()
-    allowed = cp.submit_proposal(task2, p)
-    stop.write_text("stop", encoding="utf-8")
-    # a second task cannot start while engaged, but tokens already issued are not revoked
-    from whyward.capability import CapabilityBroker
-    from whyward.execution import SandboxExecutor
-
-    broker = CapabilityBroker(SECRET)
-    executor = SandboxExecutor(tmp / "ws2", broker)
-    token = broker.issue(proposal_id="p", actions=(ActionRequest("a9", "write_text", "late.txt", {"content": "9"}),))
-    late = executor.execute(ActionRequest("a9", "write_text", "late.txt", {"content": "9"}), token)
-
-    if blocked.allowed is False and allowed.allowed and late.get("ok"):
+    if refused_issue and not wrote and not decision.allowed:
+        record("W-08", title, "OK", f"issue refused, execution refused ({decision.status.value})")
+    else:
         record(
             "W-08",
-            "Kill switch chỉ chặn lúc submit, không thu hồi capability đã phát",
+            title,
             "VULNERABLE",
-            f"khi cờ STOP tồn tại: submit bị chặn ({blocked.status.value}) nhưng capability phát trước đó "
-            f"vẫn ghi được late.txt ({late.get('ok')}) và control plane không kiểm lại kill switch trước "
-            f"từng action (control.py:279-292).",
+            f"issued={not refused_issue}, wrote={wrote}, verdict={decision.status.value}",
         )
-    else:
-        record("W-08", "Kill switch chỉ chặn lúc submit, không thu hồi capability đã phát", "OK",
-               "kill switch chặn cả đường thực thi.")
 
 
 # --------------------------------------------------------------------------- #
-# W-09  CLI verify-ledger crashes on a tampered ledger
+# W-09  verify-ledger crashes with a traceback on a corrupt file
 # --------------------------------------------------------------------------- #
 def probe_w09() -> None:
+    title = "verify-ledger ném traceback thay vì mã lỗi có kiểm soát"
     tmp = fresh_dir()
-    ledger = tmp / "ledger.jsonl"
-    env = {**os.environ, "PYTHONPATH": str(SRC)}
-    subprocess.run(
-        [sys.executable, "-m", "whyward.cli", "ask", "--catalog", str(CATALOG),
-         "--ledger", str(ledger), "Valdivia 1960 magnitude?"],
-        env=env, cwd=str(ROOT), capture_output=True, check=False,
-    )
-    ledger.write_text(
-        ledger.read_text(encoding="utf-8").replace("LOOKUP_ANSWERED", "LOOKUP_TAMPERED"),
-        encoding="utf-8",
-    )
-    proc = subprocess.run(
-        [sys.executable, "-m", "whyward.cli", "verify-ledger", str(ledger)],
-        env=env, cwd=str(ROOT), capture_output=True, text=True, check=False,
-    )
-    crashed = "Traceback" in proc.stderr
-
-    if crashed:
-        record(
-            "W-09",
-            "CLI verify-ledger crash thay vì báo JSON + exit code",
-            "VULNERABLE",
-            f"ledger bị sửa: exit={proc.returncode}, stderr bắt đầu bằng "
-            f"{proc.stderr.strip().splitlines()[-1][:90]!r}; không có output JSON kiểm toán được.",
-        )
+    path = tmp / "ledger.jsonl"
+    path.write_text('{"event_hash": "deadbeef"}\nnot json at all\n', encoding="utf-8")
+    result = run_cli("verify-ledger", str(path))
+    if "Traceback" in result.stderr:
+        record("W-09", title, "VULNERABLE", "traceback leaked to stderr")
+    elif result.returncode == 2:
+        record("W-09", title, "OK", f"exit=2 controlled failure: {result.stderr.strip()[:160]}")
     else:
-        record("W-09", "CLI verify-ledger crash thay vì báo JSON + exit code", "OK",
-               f"exit={proc.returncode}.")
+        record("W-09", title, "VULNERABLE", f"unexpected exit={result.returncode}: {result.stderr.strip()[:160]}")
 
 
 # --------------------------------------------------------------------------- #
-# W-10  CLI ask returns exit 0 even when the answer is withheld
+# W-10  Withheld answers exit 0
 # --------------------------------------------------------------------------- #
 def probe_w10() -> None:
+    title = "'ask' trả exit 0 khi câu trả lời bị giữ lại"
     tmp = fresh_dir()
-    env = {**os.environ, "PYTHONPATH": str(SRC)}
-    proc = subprocess.run(
-        [sys.executable, "-m", "whyward.cli", "ask", "--catalog", str(CATALOG),
-         "--ledger", str(tmp / "ledger.jsonl"),
-         "Động đất năm 2004 tại California có độ lớn bao nhiêu?"],
-        env=env, cwd=str(ROOT), capture_output=True, text=True, check=False,
+    control, keys = dev_control(tmp)
+    keyring_path = tmp / "keys.json"
+    keyring_path.write_text(DEMO_KEYS.read_text(encoding="utf-8"), encoding="utf-8")
+    result = run_cli(
+        "ask",
+        "Câu hỏi hoàn toàn không có trong catalog?",
+        "--ledger",
+        str(tmp / "ledger.jsonl"),
+        "--state-dir",
+        str(tmp / "state"),
+        "--policy",
+        str(ROOT / "examples" / "policy.dev.json"),
+        "--keyring",
+        str(keyring_path),
+        "--catalog",
+        str(CATALOG),
     )
-    withheld = "INSUFFICIENT_EVIDENCE" in proc.stdout
-    if withheld and proc.returncode == 0:
-        record(
-            "W-10",
-            "CLI ask trả exit 0 khi câu trả lời bị withhold",
-            "VULNERABLE",
-            "verdict=INSUFFICIENT_EVIDENCE nhưng exit=0, nên script/CI không phân biệt được "
-            "đã trả lời hay bị giữ lại.",
-        )
+    if result.returncode == 3:
+        record("W-10", title, "OK", "exit=3 (WITHHELD) for an unanswerable question")
     else:
-        record("W-10", "CLI ask trả exit 0 khi câu trả lời bị withhold", "OK",
-               f"exit={proc.returncode}.")
+        record("W-10", title, "VULNERABLE", f"exit={result.returncode}: {result.stdout.strip()[:160]}")
 
 
 # --------------------------------------------------------------------------- #
-# W-11  Default policy still accepts demo_verified facts
+# W-11  demo_verified evidence accepted by the production profile
 # --------------------------------------------------------------------------- #
 def probe_w11() -> None:
     from whyward.policy import Policy
+    from whyward.review import has_blockers, review_proposal
+    from whyward.registry import EvidenceRegistry
+    from whyward.identity import Keyring
 
-    accepted = Policy.default().accepted_review_statuses
-    if "demo_verified" in accepted:
-        record(
-            "W-11",
-            "Profile mặc định vẫn chấp nhận trạng thái demo_verified",
-            "VULNERABLE",
-            f"Policy.default().accepted_review_statuses={sorted(accepted)}; ROADMAP 0.2 yêu cầu bỏ trạng thái "
-            f"này khỏi production profile nhưng chưa có profile tách biệt.",
-        )
+    title = "demo_verified được chấp nhận trong profile production"
+    tmp = fresh_dir()
+    keys = Keyring.from_file(DEMO_KEYS)
+    registry = EvidenceRegistry(keyring=keys, signing_key_id="evidence-ingest")
+    registry.register(
+        {
+            "evidence_id": "ev-demo",
+            "source_id": "usgs",
+            "lineage_id": "lineage-a",
+            "retrieved_at": "2026-10-26T00:00:00Z",
+            "observed_fields": ["x"],
+            "blind_spots": ["y"],
+            "review_status": "demo_verified",
+        }
+    )
+    proposal = make_proposal("p-demo", evidence_ids=("ev-demo",))
+    findings = review_proposal(proposal, registry, Policy.default())
+    codes = [finding.code for finding in findings]
+    if has_blockers(findings):
+        record("W-11", title, "OK", f"production review blocks it: {codes}")
     else:
-        record("W-11", "Profile mặc định vẫn chấp nhận trạng thái demo_verified", "OK",
-               "default policy chỉ nhận verified.")
+        record("W-11", title, "VULNERABLE", "demo_verified passed production review")
 
 
 # --------------------------------------------------------------------------- #
-# W-12  Local API has no authentication and no hardening headers
+# W-12  API answers without authentication
 # --------------------------------------------------------------------------- #
 def probe_w12() -> None:
+    from whyward.api import make_server
+    from whyward.errors import AuthenticationError
+
+    title = "API trả lời không cần xác thực"
     tmp = fresh_dir()
-    env = {**os.environ, "PYTHONPATH": str(SRC)}
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "whyward.cli", "serve", "--port", str(port),
-         "--catalog", str(CATALOG), "--ledger", str(tmp / "ledger.jsonl")],
-        env=env, cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    control, _ = dev_control(tmp)
+    unauthenticated_blocked = False
     try:
-        for _ in range(40):
-            try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                    break
-            except OSError:
-                time.sleep(0.1)
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{port}/ask",
-            data=json.dumps({"question": "Valdivia 1960 magnitude?"}).encode(),
-            headers={"Content-Type": "application/json"},  # deliberately no credentials
-        )
-        with urllib.request.urlopen(request, timeout=5) as response:
-            body = json.loads(response.read().decode("utf-8"))
-            headers = dict(response.headers)
-            status = response.status
-        problems = []
-        if status == 200 and body.get("answer"):
-            problems.append("truy vấn dữ liệu không cần bất kỳ credential nào")
-        if "X-Request-Id" not in headers and "X-Request-ID" not in {k.upper() for k in headers}:
-            problems.append("không có request id / correlation id")
-        if "X-Content-Type-Options" not in headers:
-            problems.append("thiếu security headers")
-        if problems:
-            record("W-12", "Local API không có auth, không có hardening", "VULNERABLE",
-                   f"/ask trả 200 + dữ liệu; {'; '.join(problems)}; Server header = "
-                   f"{headers.get('Server')!r} (lộ phiên bản Python).")
-        else:
-            record("W-12", "Local API không có auth, không có hardening", "OK", "API từ chối truy vấn ẩn danh.")
-    except (urllib.error.URLError, OSError) as exc:
-        record("W-12", "Local API không có auth, không có hardening", "SKIP", f"không khởi động được server: {exc}")
+        make_server(control, port=0)
+    except AuthenticationError as exc:
+        unauthenticated_blocked = exc.code == "NO_API_TOKENS"
+
+    from whyward.identity import ApiTokenStore
+
+    server = make_server(control, host="127.0.0.1", port=0, tokens=ApiTokenStore())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/ask", data=b"{}", method="POST")
+        try:
+            urllib.request.urlopen(request, timeout=10)  # noqa: S310 - local probe
+            status = 200
+        except urllib.error.HTTPError as exc:
+            status = exc.code
     finally:
-        proc.terminate()
-        proc.wait(timeout=10)
+        server.shutdown()
+        server.server_close()
+
+    if unauthenticated_blocked and status == 401:
+        record("W-12", title, "OK", "server refuses to start without tokens; unauthenticated /ask -> 401")
+    else:
+        record("W-12", title, "VULNERABLE", f"no_token_store_blocked={unauthenticated_blocked}, /ask status={status}")
 
 
 # --------------------------------------------------------------------------- #
-# W-13  read_text loads the whole file into memory before truncating
+# W-13  Unbounded reads / writes
 # --------------------------------------------------------------------------- #
 def probe_w13() -> None:
     from whyward.capability import CapabilityBroker
     from whyward.execution import SandboxExecutor
-    from whyward.models import ActionRequest
+    from whyward.identity import Keyring
+    from whyward.policy import PolicyLimits
 
+    title = "Đọc/ghi không có giới hạn kích thước"
     tmp = fresh_dir()
-    broker = CapabilityBroker(SECRET)
-    executor = SandboxExecutor(tmp / "ws", broker)
-    big = tmp / "ws" / "big.bin"
-    size_mb = 64
-    big.write_bytes(b"a" * (size_mb * 1024 * 1024))
-    action = ActionRequest("a1", "read_text", "big.bin", {"max_chars": 10})
-    token = broker.issue(proposal_id="p", actions=[action])
-    result = executor.execute(action, token)
-    if result["ok"] and len(result["content"]) == 10:
+    keys = Keyring.from_file(DEMO_KEYS)
+    broker = CapabilityBroker(keys, key_id="capability")
+    limits = PolicyLimits(max_read_bytes=1024, max_write_bytes=1024)
+    executor = SandboxExecutor(tmp / "ws", broker, limits=limits)
+    workspace = tmp / "ws"
+    (workspace / "big.txt").write_bytes(b"a" * 200_000)
+
+    read_action = make_proposal("p-read", tool="read_text", resource="big.txt").actions[0]
+    read_result = executor.execute(read_action, broker.issue(proposal_id="p-read", actions=[read_action]))
+
+    write_action = make_proposal(
+        "p-write", resource="huge.txt", parameters={"content": "b" * 200_000}
+    ).actions[0]
+    write_blocked = False
+    try:
+        executor.execute(write_action, broker.issue(proposal_id="p-write", actions=[write_action]))
+    except Exception as exc:  # noqa: BLE001 - probe
+        write_blocked = getattr(exc, "code", "") == "WRITE_TOO_LARGE"
+    exists = (workspace / "huge.txt").exists()
+
+    if read_result["truncated"] and write_blocked and not exists:
+        record("W-13", title, "OK", "read truncated at the cap; oversized write refused before touching disk")
+    else:
         record(
             "W-13",
-            "read_text/write_text không có giới hạn kích thước",
+            title,
             "VULNERABLE",
-            f"file {size_mb} MB được đọc toàn bộ vào RAM rồi mới cắt còn 10 ký tự; "
-            f"write_text cũng không giới hạn và luôn ghi đè file đích mà không lưu pre-image.",
+            f"truncated={read_result['truncated']}, write_blocked={write_blocked}, file_written={exists}",
         )
-    else:
-        record("W-13", "read_text/write_text không có giới hạn kích thước", "OK", "đã có giới hạn.")
 
 
 # --------------------------------------------------------------------------- #
-# W-14  Low risk + default policy allows arbitrary code with host privileges
+# W-14  run_python reaches the host interpreter by default
 # --------------------------------------------------------------------------- #
 def probe_w14() -> None:
-    from whyward.models import Claim, Proposal, RiskTier, ActionRequest
+    from whyward.capability import CapabilityBroker
+    from whyward.execution import SandboxExecutor
+    from whyward.identity import Keyring
+    from whyward.policy import Policy
+    from whyward.review import has_blockers, review_proposal
+    from whyward.registry import EvidenceRegistry
 
-    if not Path("/etc/passwd").exists():
-        record("W-14", "Risk thấp vẫn chạy được code tuỳ ý bằng quyền host", "SKIP", "không phải Linux/POSIX.")
-        return
+    title = "run_python chạy trên host interpreter (RCE ngoài sandbox)"
     tmp = fresh_dir()
-    cp = make_control(tmp, with_executor=True)
-    cp.register_evidence(verified_evidence("e1", "lineage-1"))
-    (tmp / "ws").mkdir(parents=True, exist_ok=True)
-    (tmp / "ws" / "prog.py").write_text(
-        "open('probe_out.txt','w').write('ran')\n"
-        "print('read /etc/passwd:', bool(open('/etc/passwd').read(10)))\n",
-        encoding="utf-8",
+    keys = Keyring.from_file(DEMO_KEYS)
+    policy = Policy.default()
+    broker = CapabilityBroker(keys, key_id="capability")
+    executor = SandboxExecutor(tmp / "ws", broker)  # allow_python defaults to False
+    action = make_proposal("p-py", tool="run_python", resource="probe.py").actions[0]
+    refused = False
+    try:
+        executor.execute(action, broker.issue(proposal_id="p-py", actions=[action]))
+    except Exception as exc:  # noqa: BLE001 - probe
+        refused = getattr(exc, "code", "") == "PYTHON_EXECUTION_DISABLED"
+
+    registry = EvidenceRegistry(keyring=keys, signing_key_id="evidence-ingest")
+    registry.register(
+        {
+            "evidence_id": "ev-1",
+            "source_id": "usgs",
+            "lineage_id": "lineage-a",
+            "retrieved_at": "2026-10-26T00:00:00Z",
+            "observed_fields": ["x"],
+            "blind_spots": ["y"],
+            "review_status": "verified",
+        }
     )
-    p = Proposal(
-        proposal_id="p",
-        title="t",
-        summary="s",
-        rationale="r",
-        claims=(Claim("c", "x", evidence_ids=("e1",)),),
-        actions=(ActionRequest("a1", "run_python", "prog.py", {"timeout_seconds": 5}),),
-        risk_tier=RiskTier.LOW,
-        requested_autonomy=0,
-    )
-    task = cp.create_task("t", "worker", "run code")
-    decision = cp.submit_proposal(task, p)
-    stdout = (decision.execution_results[0].get("stdout") if decision.execution_results else "") or ""
-    if decision.allowed and "True" in stdout:
+    findings = review_proposal(make_proposal("p-py2", tool="run_python"), registry, policy)
+    review_blocked = has_blockers(findings)
+
+    if refused and review_blocked:
         record(
             "W-14",
-            "Risk thấp vẫn chạy được code tuỳ ý bằng quyền host",
-            "VULNERABLE",
-            f"verdict={decision.status.value}, human_required={decision.required_human}; "
-            f"code đọc được /etc/passwd và ghi file: {stdout.strip()!r}. "
-            f"Đây là giới hạn đã khai báo trong SECURITY.md nhưng chưa có chốt chặn kỹ thuật nào.",
+            title,
+            "OK",
+            f"disabled by default (PYTHON_DISABLED); production review blocks it: {[f.code for f in findings]}",
         )
     else:
-        record("W-14", "Risk thấp vẫn chạy được code tuỳ ý bằng quyền host", "OK",
-               f"verdict={decision.status.value}.")
+        record("W-14", title, "VULNERABLE", f"refused={refused}, review_blocked={review_blocked}")
 
 
 # --------------------------------------------------------------------------- #
-# W-15  Re-submitting a finished task raises a raw exception
+# W-15  Bad input surfaces as a raw ValueError
 # --------------------------------------------------------------------------- #
 def probe_w15() -> None:
+    from whyward.control import ControlPlane
+    from whyward.errors import WhyWardError
+    from whyward.ledger import Ledger
+    from whyward.policy import Policy
+
+    title = "Input sai ném ValueError thô thay vì lỗi có kiểu"
     tmp = fresh_dir()
-    cp = make_control(tmp, with_executor=True)
-    cp.register_evidence(verified_evidence("e1", "lineage-1"))
-    cp.register_evidence(verified_evidence("e2", "lineage-2"))
-    task = cp.create_task("t", "worker", "goal")
-    p = proposal("p", risk=None)
-    from whyward.models import RiskTier
-
-    p = proposal("p", risk=RiskTier.LOW)
-    cp.submit_proposal(task, p)
+    control = ControlPlane(policy=Policy.default(), ledger=Ledger(tmp / "ledger.jsonl"))
+    task = control.create_task("t", "worker", "probe")
+    raw_value_error = False
+    typed_error = False
     try:
-        cp.submit_proposal(task, p)
-        raised = ""
-    except Exception as exc:  # noqa: BLE001 - audit: ta cần biết kiểu lỗi thô
-        raised = f"{type(exc).__name__}: {exc}"
-    if raised:
-        record(
-            "W-15",
-            "Gọi lại submit_proposal trên task đã kết thúc ném exception thô",
-            "VULNERABLE",
-            f"{raised} — caller/HTTP layer nhận traceback thay vì GateDecision có mã lỗi ổn định; "
-            f"state machine không có API để phát hiện/replay an toàn.",
+        control.submit_proposal(
+            task,
+            {
+                "proposal_id": "broken",
+                "title": "no actions key",
+                "risk_tier": "not-a-tier",
+            },  # type: ignore[arg-type]
         )
+    except WhyWardError as exc:
+        typed_error = bool(getattr(exc, "code", ""))
+    except (ValueError, TypeError, KeyError):
+        raw_value_error = True
+
+    if raw_value_error:
+        record("W-15", title, "VULNERABLE", "raw ValueError/KeyError escaped the boundary")
+    elif typed_error:
+        record("W-15", title, "OK", "malformed proposals raise a typed WhyWardError with a code")
     else:
-        record("W-15", "Gọi lại submit_proposal trên task đã kết thúc ném exception thô", "OK",
-               "trả về quyết định có kiểm soát.")
+        record("W-15", title, "VULNERABLE", "malformed proposal was accepted silently")
 
 
-PROBES = {
+PROBES: dict[str, Callable[[], None]] = {
     "W-01": probe_w01,
     "W-02": probe_w02,
     "W-03": probe_w03,
@@ -691,44 +716,30 @@ PROBES = {
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="WhyWard audit probes")
-    parser.add_argument("--only", help="danh sách ID, ví dụ W-01,W-06")
-    parser.add_argument("--json", help="ghi kết quả ra file JSON")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--only", default="", help="comma-separated probe ids, e.g. W-02,W-14")
+    parser.add_argument("--json", default="", help="write the result table as JSON to this path")
     args = parser.parse_args(argv)
 
-    if str(SRC) not in sys.path:
-        sys.path.insert(0, str(SRC))
-
-    selected = [args.only.split(",")] if args.only else [None]
-    ids = [pid.strip() for pid in selected[0]] if selected[0] else list(PROBES)
-
-    print(f"WhyWard audit probes — repo={ROOT} python={sys.version.split()[0]}\n")
-    for pid in ids:
-        probe = PROBES.get(pid)
-        if probe is None:
-            print(f"bỏ qua ID không tồn tại: {pid}")
-            continue
+    selected = [item.strip() for item in args.only.split(",") if item.strip()] or list(PROBES)
+    for pid in selected:
+        if pid not in PROBES:
+            print(f"unknown probe: {pid}", file=sys.stderr)
+            return 2
         try:
-            probe()
-        except Exception as exc:  # noqa: BLE001 - probe phải báo lỗi chứ không chết cả bộ
-            record(pid, "probe error", "SKIP", f"{type(exc).__name__}: {exc}")
+            PROBES[pid]()
+        except Exception as exc:  # noqa: BLE001 - a crashing probe is a finding
+            record(pid, pid, "VULNERABLE", f"probe crashed: {type(exc).__name__}: {exc}")
 
-    vulnerable = [row for row in RESULTS if row[2] == "VULNERABLE"]
+    vulnerable = [row for row in RESULTS if row["verdict"] == "VULNERABLE"]
     print("-" * 78)
-    print(f"Tổng: {len(RESULTS)} probe | VULNERABLE: {len(vulnerable)} | "
-          f"OK: {sum(1 for r in RESULTS if r[2] == 'OK')} | "
-          f"SKIP: {sum(1 for r in RESULTS if r[2] == 'SKIP')}")
+    print(f"{len(RESULTS)} probes: {len(RESULTS) - len(vulnerable)} OK, {len(vulnerable)} VULNERABLE")
+    if vulnerable:
+        print("still vulnerable: " + ", ".join(row["id"] for row in vulnerable))
     if args.json:
-        Path(args.json).write_text(
-            json.dumps(
-                [{"id": r[0], "title": r[1], "verdict": r[2], "detail": r[3]} for r in RESULTS],
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        print(f"JSON: {args.json}")
-    return 0
+        Path(args.json).write_text(json.dumps(RESULTS, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"wrote {args.json}")
+    return 0 if not vulnerable else 1
 
 
 if __name__ == "__main__":

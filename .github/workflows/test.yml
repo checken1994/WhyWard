@@ -4,22 +4,88 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   unit:
+    name: unit (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ['3.11', '3.12']
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Run unit tests
+      - name: Run unit tests (stdlib only, no install)
         shell: bash
-        run: PYTHONPATH=src python -m unittest discover -s tests -v
+        run: PYTHONPATH=src:tests python -m unittest discover -s tests -t tests -v
+
+  quality:
+    name: lint, types, security, coverage, probes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: ruff
+        run: ruff check src tests
+      - name: mypy (strict on the package)
+        run: mypy
+      - name: bandit (fail on medium+)
+        run: bandit -q -r src -ll
+      - name: coverage gate
+        run: |
+          coverage run --source=src/whyward -m pytest -q
+          coverage report
+      - name: security probes W-01…W-15
+        run: PYTHONPATH=src python docs/audit/reproduce_findings.py --json probe-results.json
+      - name: upload probe results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-results
+          path: probe-results.json
+
+  demo:
+    name: governed demo and ledger verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: python -m pip install -e .
       - name: Run governed demo
-        shell: bash
-        run: PYTHONPATH=src python -m whyward.cli demo --catalog examples/catalog
+        run: |
+          whyward demo --workdir .whyward-demo --catalog examples/catalog
+      - name: Verify ledger chain
+        run: |
+          whyward verify-ledger .whyward-demo/ledger.jsonl --keyring examples/keys/demo.keyring.json --require-signature
+      - name: Anchor, verify and export report
+        run: |
+          whyward checkpoint .whyward-demo/ledger.jsonl --anchor .whyward-demo/anchor.json \
+            --keyring examples/keys/demo.keyring.json
+          whyward verify-ledger .whyward-demo/ledger.jsonl --anchor .whyward-demo/anchor.json \
+            --keyring examples/keys/demo.keyring.json --require-signature
+          whyward report .whyward-demo/ledger.jsonl --keyring examples/keys/demo.keyring.json --limit 20
+      - name: Doctor must pass in dev
+        run: whyward doctor --profile dev --catalog examples/catalog
+      - name: Withheld answers must exit 3
+        run: |
+          set +e
+          whyward ask "Câu hỏi không có trong catalog?" --catalog examples/catalog \
+            --policy examples/policy.dev.json --keyring examples/keys/demo.keyring.json \
+            --ledger .whyward-demo/q.jsonl --state-dir .whyward-demo/state
+          code=$?
+          test "$code" -eq 3 || { echo "expected exit 3 (withheld), got $code"; exit 1; }

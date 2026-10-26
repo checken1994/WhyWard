@@ -1,0 +1,74 @@
+{
+  "policy": {
+    "schema_version": 2,
+    "profile": "production",
+    "allowed_tools": [
+      "read_text",
+      "write_text"
+    ],
+    "protected_path_prefixes": [
+      ".whyward",
+      "control",
+      "keys",
+      "policy",
+      "policies",
+      ".git"
+    ],
+    "allowed_source_ids": [
+      "internal-test",
+      "usgs"
+    ],
+    "accepted_review_statuses": [
+      "verified"
+    ],
+    "accepted_registry_key_ids": [
+      "evidence-ingest"
+    ],
+    "human_required_risk_tiers": [
+      "critical",
+      "high"
+    ],
+    "human_required_tools": [
+      "run_python"
+    ],
+    "max_autonomy_without_human": 2,
+    "min_independent_lineages": {
+      "critical": 2,
+      "high": 2,
+      "low": 1,
+      "medium": 1
+    },
+    "require_alternatives_from": "medium",
+    "require_consequences_from": "medium",
+    "limits": {
+      "max_actions_per_proposal": 16,
+      "max_read_bytes": 1048576,
+      "max_write_bytes": 1048576,
+      "max_python_timeout_seconds": 10,
+      "max_python_output_bytes": 262144,
+      "max_resource_bytes": 4194304
+    },
+    "review": {
+      "require_human_decision_signature": true,
+      "approval_ttl_seconds": 3600,
+      "reject_stale_on_read": true,
+      "min_restatement_chars": 20
+    },
+    "evidence": {
+      "require_registry_signature": true,
+      "require_checksum_in_manifest": true,
+      "require_record_count": true,
+      "max_age_seconds_by_class": {
+        "volatile": 86400,
+        "periodic": 7776000,
+        "historical_stable": 0
+      }
+    },
+    "policy_version": "2"
+  },
+  "signature": {
+    "algorithm": "hmac-sha256",
+    "key_id": "policy-signing",
+    "value": "e1bfad1b3d28e74ef9b19f44e32f2322c97a8a96a06757bb1cab98dd67a26761"
+  }
+}
