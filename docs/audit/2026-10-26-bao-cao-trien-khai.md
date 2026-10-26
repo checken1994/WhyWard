@@ -135,7 +135,7 @@ Hành vi đo được trên bản chạy thật:
 | Execution | ghi/đọc cơ bản, `run_python` bật | giới hạn byte, chặn symlink, đọc lại, `run_python` tắt + rlimit/container |
 | API | local, không auth | token store bắt buộc, scope, rate limit, body cap, problem+json |
 | CLI | vài lệnh, exit 0/1 | 11 lệnh, exit 0/1/2/3/4/5 theo hợp đồng |
-| Quality gates | 18 test | 245 test, coverage gate, ruff, mypy strict, bandit, 15 probe |
+| Quality gates | 18 test | 246 test, coverage gate, ruff, mypy strict, bandit, 15 probe |
 
 ---
 
@@ -145,7 +145,7 @@ Hành vi đo được trên bản chạy thật:
 git clone https://github.com/checken1994/WhyWard && cd WhyWard
 git checkout <commit-nghiệm-thu>
 
-make test          # 245 test, không cần cài gì ngoài Python 3.11+
+make test          # 246 test, không cần cài gì ngoài Python 3.11+
 make lint type security
 make coverage      # cần coverage/pytest
 make probes        # 15/15 OK
@@ -191,7 +191,7 @@ python -m unittest discover -s tests -t tests
 | Bằng chứng & provenance | 2.0 | 3.5 | Chữ ký, freshness, lineage, manifest bắt buộc; chưa có ingestion thật |
 | Khả năng kiểm toán | 2.0 | 4.0 | Ledger bền, khoá, anchor, export, verify theo anchor |
 | Vận hành & API | 1.5 | 3.0 | Auth, scope, rate limit, readiness, kill switch; chưa TLS/multi-host |
-| Chất lượng kỹ thuật | 2.0 | 4.0 | 245 test, coverage 88 %, ruff/mypy/bandit sạch, CI 3 tầng |
+| Chất lượng kỹ thuật | 2.0 | 4.0 | 246 test, coverage 88 %, ruff/mypy/bandit sạch, CI 3 tầng |
 | Tài liệu & trung thực | 3.5 | 4.0 | Matrix truy vết, tài liệu khớp hành vi, nêu rõ giới hạn |
 | Sẵn sàng production | 1.0 | 2.0 | Vẫn thiếu TLS, đa host, review mật mã, nghiệm thu độc lập |
 | **Trung bình** | **≈2.0** | **≈3.5** | |
