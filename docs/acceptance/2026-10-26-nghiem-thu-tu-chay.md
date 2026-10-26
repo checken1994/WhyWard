@@ -3,11 +3,11 @@
 | | |
 |---|---|
 | **Ngày** | 2026-10-26 |
-| **Commit được kiểm** | `f17129cefbb010a3406c985bac73b252eedd1127` (nhánh `arena/6afa33c6-whyward`) |
+| **Commit được kiểm** | `ee5e943697d8013cf4f13558f55b76aec3b8b6e4` (nhánh `arena/6afa33c6-whyward`) |
 | **Hình thức** | clone sạch từ `https://github.com/checken1994/WhyWard` vào thư mục tạm, không dùng bất kỳ artefact nào của máy phát triển |
 | **Môi trường** | Linux 6.1.158, Python 3.11.2, không cài thêm package nào |
 | **Lệnh** | `python3 docs/acceptance/acceptance_runner.py --report … --json …` |
-| **Kết quả** | **ACCEPTED — 9/9 check PASS**, `dirty=False`, exit 0, 20.9 s |
+| **Kết quả** | **ACCEPTED — 9/9 check PASS**, `dirty=False`, exit 0, 23.5 s |
 | **Ai chạy** | **Chính agent đã viết code** |
 | **Giá trị** | Chứng minh *tái lập được từ repo công khai*; **không** phải nghiệm thu độc lập |
 
@@ -25,7 +25,7 @@
 |---|---|---|---|
 | A-01 | Xuất xứ repo rõ ràng, cây làm việc sạch | PASS | `commit=f17129c…` `dirty=False` |
 | A-02 | Chỉ dùng thư viện chuẩn | PASS | 0 import ngoài stdlib |
-| A-03 | Bộ test của repo | PASS | 245 test, `OK`, 17.9 s |
+| A-03 | Bộ test của repo | PASS | 246 test, `OK`, ~18 s |
 | A-04 | 15 probe tấn công | PASS | `15 probes: 15 OK, 0 VULNERABLE` |
 | A-05 | Hành trình vận hành | PASS | demo 0 · verify 0 · anchor 0 · ask trả lời 0 · ask bị giữ lại **3** · report 0 · doctor 0 |
 | A-06 | Phát hiện sửa đổi | PASS | sửa ledger = True · cắt ledger so với anchor = True · sửa catalog = True |
@@ -38,7 +38,7 @@ Chi tiết thô (nguyên văn từ harness):
 ```text
 [PASS] A-01 ... commit=f17129cefbb0 branch=arena/6afa33c6-whyward dirty=False
 [PASS] A-02 ... 0 non-stdlib imports
-[PASS] A-03 ... Ran 245 tests in 17.928s | OK
+[PASS] A-03 ... Ran 246 tests in 18.0s | OK
 [PASS] A-04 ... 15 probes: 15 OK, 0 VULNERABLE
 [PASS] A-05 ... demo rc=0 verify rc=0 (valid: true, events: 6) checkpoint rc=0
                 anchored verify rc=0 ask(answered) rc=0 ask(withheld) rc=3
@@ -106,7 +106,7 @@ viết code, và yêu cầu chạy đúng giao thức:
 
 ```bash
 git clone https://github.com/checken1994/WhyWard && cd WhyWard
-git checkout f17129cefbb010a3406c985bac73b252eedd1127   # hoặc commit mới hơn
+git checkout ee5e943697d8013cf4f13558f55b76aec3b8b6e4   # hoặc commit mới hơn
 git status --porcelain          # phải rỗng
 python3 docs/acceptance/acceptance_runner.py \
         --report acceptance-report.md --json acceptance-report.json
