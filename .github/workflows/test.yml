@@ -25,13 +25,13 @@ jobs:
         shell: bash
         run: |
           set +e
-          PYTHONPATH=src python -m unittest discover -s tests -t tests -v > test-output.txt 2>&1
+          PYTHONPATH=src python -m unittest discover -s tests -t tests > test-output.txt 2>&1
           code=$?
           if [ $code -ne 0 ]; then
             # One compact annotation: failing test names plus the tail, which
             # contains the traceback (GitHub caps a step at 10 annotations).
             names=$(grep -cE "^(FAIL|ERROR): " test-output.txt)
-            head_text=$(tr -d '\r' < test-output.txt | head -c 5500 | tr '\n' '|')
+            head_text=$(awk '/^=+$/{flag=1} flag' test-output.txt | head -c 5000 | tr '\n' '|')
             echo "::error title=unit failures (${names})::${head_text}"
           fi
           exit $code
