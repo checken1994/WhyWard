@@ -591,7 +591,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"scratch directory: {h.scratch}\n")
 
     provenance = check_provenance(h, args.allow_dirty)
-    if provenance["dirty"] and not args.allow_dirty:
+    if provenance["dirty"] == "True" and not args.allow_dirty:
         print("\nrefusing to continue: worktree is dirty. Commit, or re-run with --allow-dirty.")
         return 2
 
