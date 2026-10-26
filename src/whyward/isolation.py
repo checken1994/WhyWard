@@ -74,7 +74,7 @@ def build_container_command(
         "--tmpfs",
         CONTAINER_TMPFS_SPEC,
         "-v",
-        f"{workspace}:/work:rw",
+        f"{workspace.as_posix()}:/work:rw",
         "-w",
         "/work",
     ]

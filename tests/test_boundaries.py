@@ -877,7 +877,7 @@ class W14ExecutionIsolationTests(unittest.TestCase):
         for flag in ("--network none", "--cap-drop ALL", "--read-only", "--pids-limit", "no-new-privileges", "--user"):
             self.assertIn(flag, joined)
         self.assertNotIn("--privileged", joined)
-        self.assertIn("/tmp/ws:/work:rw", joined)
+        self.assertIn("/tmp/ws:/work:rw", joined.replace("\\", "/"))
 
     def test_no_container_runtime_fails_closed(self) -> None:
         from whyward.errors import ConfigurationError as ConfigError

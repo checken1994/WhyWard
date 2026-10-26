@@ -13,6 +13,7 @@ Exit codes are part of the contract:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import secrets
@@ -70,6 +71,20 @@ VERDICT_EXIT = {
 
 def _print_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+
+
+def _force_utf8_io() -> None:
+    """Make stdout/stderr UTF-8 regardless of the platform default.
+
+    Verdicts and evidence titles are frequently non-ASCII; on a Windows console
+    the default code page raises UnicodeEncodeError and turns a correct answer
+    into a crash. Reconfiguring is cheap and keeps the CLI honest.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with contextlib.suppress(OSError, ValueError):  # pragma: no cover - exotic streams
+                reconfigure(encoding="utf-8", errors="replace")
 
 
 def _keyring(args: argparse.Namespace, *, allow_demo: bool = False) -> Keyring:
@@ -598,6 +613,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_io()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):
