@@ -210,7 +210,8 @@ class KeyManagementTests(unittest.TestCase):
             keys = Path(tmp) / "keys.json"
             generated = run_cli("keygen", "--out", str(keys), "--key-id", "policy-signing")
             self.assertEqual(generated.returncode, 0, generated.stderr)
-            self.assertEqual(oct(keys.stat().st_mode & 0o777), "0o600")
+            if os.name == "posix":
+                self.assertEqual(oct(keys.stat().st_mode & 0o777), "0o600")
 
             policy = Path(tmp) / "policy.json"
             payload = json.loads(DEV_POLICY.read_text(encoding="utf-8"))["policy"]
@@ -254,7 +255,8 @@ class KeyManagementTests(unittest.TestCase):
             stored = json.loads(store.read_text(encoding="utf-8"))
             self.assertNotIn(token, store.read_text(encoding="utf-8"))
             self.assertEqual(stored["tokens"][0]["subject"], "ci")
-            self.assertEqual(store.stat().st_mode & 0o777, 0o600)
+            if os.name == "posix":
+                self.assertEqual(store.stat().st_mode & 0o777, 0o600)
 
     def test_serve_without_token_store_exits_four(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

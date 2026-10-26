@@ -58,7 +58,8 @@ class CliCommandTests(unittest.TestCase):
         code, out, _ = invoke("keygen", "--output", output)
         self.assertEqual(code, 0)
         self.assertTrue(Path(output).exists())
-        self.assertEqual(os.stat(output).st_mode & 0o777, 0o600)
+        if os.name == "posix":
+            self.assertEqual(os.stat(output).st_mode & 0o777, 0o600)
         code, out, _ = invoke("keygen", "--output", output)
         self.assertEqual(code, 4)  # refuses to overwrite
         policy_path = self.tmp / "policy.json"
