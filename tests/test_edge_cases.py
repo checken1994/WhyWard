@@ -683,9 +683,12 @@ class LedgerEdgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "l.jsonl"
             held = _FileLock(path, timeout=1.0, stale_after=600.0)
+            def take(lock):
+                with lock:
+                    return True
+
             with held, self.assertRaises(IntegrityError) as ctx:
-                with _FileLock(path, timeout=0.2, stale_after=600.0):
-                    pass
+                take(_FileLock(path, timeout=0.2, stale_after=600.0))
             self.assertEqual(ctx.exception.code, "LEDGER_LOCKED")
 
     def test_stale_lock_is_broken(self) -> None:
